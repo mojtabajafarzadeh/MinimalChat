@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login — Minimal Chat</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="center">
+  <form class="card" id="form">
+    <h1>Welcome back</h1>
+    <p class="sub">Log in to join the chat.</p>
+    <label for="username">Username</label>
+    <input id="username" type="text" autocomplete="username" maxlength="32" required>
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" maxlength="128" required>
+    <div class="error" id="error"></div>
+    <button class="btn" type="submit">Log in</button>
+    <p class="switch">No account? <a href="/register">Register</a></p>
+  </form>
+</div>
+<script>
+const form = document.getElementById('form');
+const err = document.getElementById('error');
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  err.style.display = 'none';
+  const fd = new FormData();
+  fd.append('username', document.getElementById('username').value.trim());
+  fd.append('password', document.getElementById('password').value);
+  try {
+    const r = await fetch('/api/login', { method: 'POST', body: fd });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Login failed.');
+    location.href = '/chat';
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.style.display = 'block';
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Register — Minimal Chat</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="center">
+  <form class="card" id="form">
+    <h1>Create account</h1>
+    <p class="sub">Pick a username and start chatting.</p>
+    <label for="name">Name</label>
+    <input id="name" type="text" autocomplete="name" maxlength="64" required>
+    <label for="username">Username</label>
+    <input id="username" type="text" autocomplete="username" maxlength="32" required>
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="new-password" maxlength="128" required>
+    <label for="confirm">Confirm password</label>
+    <input id="confirm" type="password" autocomplete="new-password" maxlength="128" required>
+    <div class="error" id="error"></div>
+    <button class="btn" type="submit">Register</button>
+    <p class="switch">Have an account? <a href="/login">Log in</a></p>
+  </form>
+</div>
+<script>
+const form = document.getElementById('form');
+const err = document.getElementById('error');
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  err.style.display = 'none';
+  const fd = new FormData();
+  fd.append('name', document.getElementById('name').value.trim());
+  fd.append('username', document.getElementById('username').value.trim());
+  fd.append('password', document.getElementById('password').value);
+  fd.append('confirm', document.getElementById('confirm').value);
+  try {
+    const r = await fetch('/api/register', { method: 'POST', body: fd });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Registration failed.');
+    location.href = '/chat';
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.style.display = 'block';
+  }
+});
+</script>
+</body>
+</html>

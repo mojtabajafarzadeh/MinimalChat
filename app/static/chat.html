@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chat room — Minimal Chat</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="chat-wrap">
+  <header class="chat-header">
+    <span class="me" id="me">…</span>
+    <button class="logout" id="logout">Logout</button>
+  </header>
+  <div class="status" id="status">Connecting…</div>
+  <div id="messages"></div>
+  <form class="composer" id="form">
+    <input id="input" type="text" placeholder="Type a message…" maxlength="1000" autocomplete="off">
+    <button type="submit">Send</button>
+  </form>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
