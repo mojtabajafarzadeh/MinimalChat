@@ -21,6 +21,15 @@
   let conversations = [];
   let seen = {}; // message id -> {name, username, content} of the current view
   let pendingReply = null; // {id, name, username, content} or null
+  // Unread counts, for this page load only. Nothing is persisted and nothing
+  // is sent to the server: a reload starts from zero. That is the whole
+  // feature -- it answers "did something arrive while I was looking
+  // elsewhere", which is a question about this page load.
+  let unread = Object.create(null);
+  // conversation key -> {button, badge, label}, so a badge update never
+  // rebuilds the list and never steals focus from someone tabbing through it.
+  let convRows = Object.create(null);
+  const pubBadge = btnPublic.querySelector('.conv-badge');
 
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -117,17 +126,68 @@
     if (window.matchMedia('(max-width: 600px)').matches) setSidebar(false);
   }
 
+  /* Usernames are user-chosen, so the key is lowercased and both maps are
+     prototype-less: a conversation with @constructor must not resolve to
+     something off Object.prototype. */
+  function convKey(kind, username) {
+    return kind === 'public' ? 'public' : 'dm:' + String(username).toLowerCase();
+  }
+
+  function paintRow(row) {
+    const n = unread[row.key] || 0;
+    if (row.badge) {
+      row.badge.textContent = n > 99 ? '99+' : String(n);
+      row.badge.classList.toggle('hidden', n === 0);
+    }
+    // Left to itself the digits join the button's name and it announces
+    // "@alice 3", so spell the count out and hide the badge from assistive
+    // technology to avoid saying it twice.
+    row.button.setAttribute('aria-label',
+      n ? row.label + ', ' + n + ' unread message' + (n === 1 ? '' : 's')
+        : row.label);
+  }
+
+  function paintBadges() {
+    Object.keys(convRows).forEach((k) => paintRow(convRows[k]));
+  }
+
+  function markUnread(kind, username) {
+    const key = convKey(kind, username);
+    unread[key] = (unread[key] || 0) + 1;
+    paintBadges();
+  }
+
+  function markRead(kind, username) {
+    delete unread[convKey(kind, username)];
+    paintBadges();
+  }
+
   function renderConversations() {
     convBox.innerHTML = '';
+    convRows = Object.create(null);
     conversations.forEach((c) => {
+      const key = convKey('dm', c.username);
       const b = document.createElement('button');
       b.className = 'conv' + (view.kind === 'dm' && view.username === c.username ? ' active' : '');
-      b.textContent = '@' + c.username;
+      const name = document.createElement('span');
+      name.className = 'conv-name';
+      name.textContent = '@' + c.username;
+      const badge = document.createElement('span');
+      badge.className = 'conv-badge hidden';
+      badge.setAttribute('aria-hidden', 'true');
+      b.appendChild(name);
+      b.appendChild(badge);
       b.title = c.name;
       b.addEventListener('click', () => { openDm(c.username); closeSidebarOnNarrow(); });
       convBox.appendChild(b);
+      convRows[key] = { key: key, button: b, badge: badge,
+                        label: 'Private chat with @' + c.username };
     });
+    // # Public Chat is static markup, but it is a conversation like any other.
+    convRows.public = { key: 'public', button: btnPublic, badge: pubBadge,
+                        label: 'Public Chat' };
     btnPublic.classList.toggle('active', view.kind === 'public');
+    paintBadges();
   }
 
   async function loadConversations() {
@@ -144,6 +204,7 @@
 
   async function openPublic() {
     view = { kind: 'public' };
+    markRead('public');
     titleEl.textContent = 'Public Chat';
     input.placeholder = 'Type a message…';
     list.innerHTML = '';
@@ -157,6 +218,7 @@
 
   async function openDm(username) {
     view = { kind: 'dm', username: username };
+    markRead('dm', username);
     titleEl.textContent = 'Private chat with @' + username;
     input.placeholder = 'Message @' + username + '…';
     list.innerHTML = '';
@@ -224,11 +286,20 @@
     }
     if (m.kind === 'dm') {
       const other = otherParty(m);
+      // may create the row, which paints the badge
       ensureInList(other);
-      if (view.kind === 'dm' && view.username === other) addMessage(m);
+      if (view.kind === 'dm' && view.username === other) {
+        addMessage(m);
+      } else {
+        // A message you cannot see right now. This includes the echo of your
+        // own send, which can only ever arrive for the conversation you are
+        // already looking at -- so it lands in the branch above, not here.
+        markUnread('dm', other);
+      }
       return;
     }
     if (view.kind === 'public') addMessage(m);
+    else markUnread('public');
   }
 
   form.addEventListener('submit', (e) => {

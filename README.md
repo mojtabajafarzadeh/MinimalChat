@@ -337,10 +337,30 @@ The layout is verified by measuring the rendered page in a real browser at
 - **Line length stays readable.** Message bubbles are capped at `36rem`, which
   bites because the app frame is already capped at `68rem`.
 
-Two details that only a browser shows: the theme toggle uses `U+FE0E` text
-presentation because colour emoji ignore `color` and the header inverts with
-the theme; and heights use `dvh` (with a `vh` fallback) because iOS shrinks the
-viewport when its toolbar hides.
+Two details that only a browser shows. Heights use `dvh` (with a `vh`
+fallback), because iOS shrinks the viewport when its toolbar hides. And the
+header does **not** invert with the theme — `--header` is near-black in both —
+so anything inside it takes `--header-ink`, never `--foreground`; the theme
+toggle is therefore measured for contrast against the header rather than
+assumed, because a wrong ink there leaves a present, clickable button that
+paints nothing at all.
+
+### Unread badges
+
+`# Public Chat` and each private conversation carry a count of messages that
+arrived while you were looking somewhere else. The counters live in the page
+and are gone on reload: nothing is persisted and nothing is sent to the
+server. That is the design rather than a shortcut — a badge answers "did
+something come in while I was elsewhere", which is a question about this page
+load, and storing read state would mean a new table plus write-amplification
+on every message to answer a question the current page already answers.
+
+A message in the conversation you are looking at is read on arrival and never
+badges. Counts accumulate, cap at `99+`, and clear when you open the
+conversation. The badge is `aria-hidden`; the button's accessible name spells
+the count out ("Private chat with @bob, 2 unread messages") so the digits are
+not read as part of the name. Verified in a real browser against a real
+WebSocket in `tests/test_unread_badges.py`.
 
 ## Features
 
@@ -436,3 +456,10 @@ The seeded content is deliberately hostile -- a 400-character token with no
 spaces, a long URL, emoji and a 30-character username -- because an empty room
 does not break narrow layouts and makes the suite look green for the wrong
 reason.
+
+`tests/test_identity_verification.py` and `tests/test_unread_badges.py` reuse
+that DevTools harness (as `tests/test_unread_badges.py` also needs the
+`websockets` module) to drive a real browser against a real server: the first
+rotates the server key to prove the pin fires, the second has two accounts
+talk over a real WebSocket and asserts that badges appear, accumulate, cap and
+clear exactly when the conversation they count goes off screen.

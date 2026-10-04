@@ -344,7 +344,9 @@ body {
 }
 
 .conv {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   width: 100%;
   text-align: left;
   padding: 0.5rem 0.625rem;
@@ -355,11 +357,29 @@ body {
   font-size: 0.875rem;
   cursor: pointer;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
+/* The label owns the ellipsis: overflow on the flex container would clip the
+   badge instead of truncating a long username. */
+.conv-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conv:hover { background: var(--sidebar-hover); }
 .conv.active { background: var(--secondary); color: var(--secondary-foreground); font-weight: 500; }
+
+/* Token pair, so the badge inverts with the theme on its own -- the same
+   reason it is not a fixed colour. */
+.conv-badge {
+  flex: none;
+  min-width: 1.125rem;
+  height: 1.125rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 1.125rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 
 .side-title {
   font-size: 0.6875rem;
