@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: ["*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Import check
+        run: python -c "import app.main; print('app imports cleanly')"
+
+      - name: Unit tests (no test-only dependencies)
+        run: python -m unittest discover -s tests -v
+
+      - name: Start server and wait for readiness
+        run: |
+          python run.py &
+          for i in $(seq 1 30); do
+            if curl -sf -o /dev/null http://127.0.0.1:8001/api/config; then
+              echo "server up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "server did not become ready"; tail -50 nohup.out 2>/dev/null; exit 1
+
+      - name: Smoke test the HTTP surface
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:8001
+          curl -sf -o /dev/null "$base/login"
+          curl -sf -o /dev/null "$base/register"
+          curl -sf -o /dev/null "$base/enc/hello"
+          # The encrypted channel refuses cookie-based access to /api/*.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -d 'username=a&password=b' "$base/api/login")
+          test "$code" = "403" || { echo "expected 403, got $code"; exit 1; }
+          # /api/config must be readable so the client can pick a transport.
+          curl -sf "$base/api/config" | grep -q enc_enabled
+          echo "smoke test OK"
+
+      - name: Verify the offline bundle still builds
+        run: |
+          python packaging/build.py
+          test -f dist/chat-app-linux-x86_64.tar.gz
+          echo "bundle OK"
+
+      - name: Check nothing sensitive is tracked
+        run: |
+          set -euo pipefail
+          tracked=$(git ls-files | grep -E '\.db(-wal|-shm|-journal)?$|\.pem$|\.key$|^\.chat_secret$|^enc_keys\.json$|^data/|^\.env$' || true)
+          if [ -n "$tracked" ]; then
+            echo "these secrets must not be tracked:"; echo "$tracked"; exit 1
+          fi
+          echo "no secrets tracked"
+
+  nfs-detection:
+    # The synthetic-mountinfo tests are also run standalone so the filesystem
+    # guard is verifiable without a real NFS server.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m unittest tests.test_fs_detection -v
