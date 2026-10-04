@@ -250,6 +250,44 @@ or key rotation).
 
 Set `ENC_SHOW_FINGERPRINT=false` only if you accept losing the MITM check.
 
+## Verifying the server identity
+
+`run.py` prints the server's signing-key fingerprint at every startup:
+
+```
+Server identity fingerprint (chat-enc-v1 signing key):
+  7C1D 2B0B 67C3 3F33 A643 E004 E820 44E2 7EA5 9674 59EA 99FA 6129 F8E8 BB5A 1BDF
+```
+
+The fingerprint is derived from the persisted signing key, so it is identical
+across restarts and across workers. Reading it here is the point: the browser
+can only learn the fingerprint from the very connection it is meant to verify,
+so a fingerprint shown in the page proves nothing on its own — anything
+intercepting the connection can serve its own key and its own fingerprint. The
+console (or the host's logs, or SSH) is a channel the browser cannot influence.
+
+The web UI has a **Server identity** panel on the chat, login and register
+pages. It shows what this connection presents, what this browser has pinned,
+and takes the expected value to compare against:
+
+- paste the fingerprint from the server log and press **Verify and pin**;
+- a match is pinned, and from then on the browser refuses to connect if the
+  server identity ever changes;
+- a **mismatch is never pinned** — otherwise whoever answers the first request
+  could overwrite the pin and make the next reconnect look trustworthy. The
+  stale pin is kept and shown in red so the two can be compared;
+- spacing, case and separators are normalised, so a value pasted from a
+  terminal works;
+- **forget pin** drops the pin; the next connection is trust-on-first-use again.
+
+When the server key changes the panel opens itself, the previous pin is flagged
+and both values are shown side by side. Note that the banner's escape hatch
+("I verified it — trust and reload") performs *no* verification: it only
+forgets the old pin, so use it after checking the console.
+
+The trust-on-first-use pin still happens automatically, so the panel is an
+addition to the MITM check rather than a replacement for it.
+
 ## Admin panel
 
 Set `ADMIN_PASSWORD` (and optionally `ADMIN_PATH`, default `/admin`) to

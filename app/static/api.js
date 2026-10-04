@@ -40,12 +40,26 @@ var Api = (function () {
     });
   }
 
+  // Lets the identity panel and the security strip re-read the fingerprint
+  // without either having to know about the other.
+  function notifyIdentity() {
+    try {
+      document.dispatchEvent(new CustomEvent('chat:identity'));
+    } catch (e) { /* older browsers */ }
+  }
+
   function handshake() {
     var ch = new Enc.Channel();
+    // Published before the handshake resolves on purpose. An identity change
+    // makes handshake() reject, and that is precisely when the operator needs
+    // to see and check the fingerprint the server is presenting -- so the
+    // channel is recorded either way. `state.mode` is only set on success, so
+    // nothing can mistake a half-built channel for a usable one.
+    state.channel = ch;
     return ch.handshake(handshakeJson).then(function () {
-      state.channel = ch;
       state.mode = 'enc';
       Enc.saveState(ch);
+      notifyIdentity();
       return state;
     });
   }
@@ -65,7 +79,9 @@ var Api = (function () {
     bar.appendChild(txt);
     if (onTrust) {
       var btn = document.createElement('button');
-      btn.textContent = 'Trust the new identity';
+      // Only do this after checking the fingerprint out of band: this button
+      // performs no verification, it just forgets the old pin.
+      btn.textContent = 'I verified it — trust and reload';
       btn.style.cssText =
         'padding:6px 12px;border:none;border-radius:6px;font-weight:600;cursor:pointer';
       btn.addEventListener('click', onTrust);
@@ -108,6 +124,9 @@ var Api = (function () {
 
   function reportIdentityChange(err) {
     state.identityChanged = true;
+    // The handshake threw, so the success path never fired. Say so anyway: the
+    // identity panel has to show the new fingerprint and flag the stale pin.
+    notifyIdentity();
     identityBanner('The server identity changed since you last connected. This ' +
       'is expected after a server move or key rotation — but it can also mean ' +
       'someone is impersonating the server. Stop and verify before continuing.' +
@@ -130,12 +149,14 @@ var Api = (function () {
     return restored.call('/api/me', {}).then(function () {
       state.channel = restored;
       state.mode = 'enc';
+      notifyIdentity();
       return state;
     }, function (err) {
       if (err && typeof err.status === 'number') {
         // Channel is healthy, the user simply is not logged in yet.
         state.channel = restored;
         state.mode = 'enc';
+        notifyIdentity();
         return state;
       }
       Enc.clearState();
@@ -317,6 +338,41 @@ var Api = (function () {
     return fp ? Enc.pinState(fp) : 'none';
   }
 
+  function pinnedFingerprint() {
+    return Enc.pinnedFingerprint();
+  }
+
+  /* Compare a fingerprint the operator obtained through a trusted channel
+     against the one this connection actually presents, and pin it when they
+     agree. Never pins on a mismatch: doing so would let anyone who can answer
+     the first request overwrite the pin and make the next reconnect look
+     trustworthy. */
+  function verifyFingerprint(expected) {
+    var live = fingerprint();
+    if (!live) {
+      return { ok: false, reason: 'no-fingerprint',
+               message: 'No server fingerprint yet: the encrypted channel is ' +
+                        'not established.' };
+    }
+    var normalized = Enc.normalizeFingerprint(expected);
+    if (!normalized) {
+      return { ok: false, reason: 'malformed', live: live,
+               message: 'That is not a fingerprint: expected 64 hex ' +
+                        'characters, in groups of four.' };
+    }
+    if (normalized !== live) {
+      return { ok: false, reason: 'mismatch', live: live, expected: normalized,
+               pinned: Enc.pinnedFingerprint(),
+               message: 'Does NOT match the server. Stop: either the server ' +
+                        'key changed or something is intercepting this ' +
+                        'connection. Nothing has been pinned.' };
+    }
+    Enc.setPinnedFingerprint(live);
+    return { ok: true, live: live, pinned: live,
+             message: 'Verified and pinned. This browser will now refuse to ' +
+                      'connect if the server identity ever changes.' };
+  }
+
   return {
     boot: boot,
     me: me,
@@ -331,5 +387,8 @@ var Api = (function () {
     state: state,
     fingerprint: fingerprint,
     pinState: pinState,
+    pinnedFingerprint: pinnedFingerprint,
+    verifyFingerprint: verifyFingerprint,
+    clearPin: Enc.clearPin,
   };
 })();

@@ -102,18 +102,35 @@ var Enc = (function () {
     });
   }
 
-  function pinStatus(serverFp) {
-    var known = null;
-    try { known = localStorage.getItem(PIN_KEY); } catch (e) { known = null; }
-    if (!known) {
-      try { localStorage.setItem(PIN_KEY, serverFp); } catch (e) {}
-      return 'new';
-    }
-    return known === serverFp ? 'ok' : 'changed';
+  function pinnedFingerprint() {
+    try { return localStorage.getItem(PIN_KEY); } catch (e) { return null; }
+  }
+
+  function setPinnedFingerprint(fp) {
+    try { localStorage.setItem(PIN_KEY, fp); } catch (e) {}
   }
 
   function clearPin() {
     try { localStorage.removeItem(PIN_KEY); } catch (e) {}
+  }
+
+  // Accepts what a human is likely to paste -- lowercase, no spaces, colons or
+  // dashes from a `sha256sum`-style listing, the server's own grouped form --
+  // and returns the canonical grouped form, or null if it is not a fingerprint.
+  function normalizeFingerprint(text) {
+    if (typeof text !== 'string') return null;
+    var hex = text.toUpperCase().replace(/[^0-9A-F]/g, '');
+    if (hex.length !== 64) return null;
+    return (hex.match(/.{1,4}/g) || []).join(' ');
+  }
+
+  function pinStatus(serverFp) {
+    var known = pinnedFingerprint();
+    if (!known) {
+      setPinnedFingerprint(serverFp);
+      return 'new';
+    }
+    return known === serverFp ? 'ok' : 'changed';
   }
 
   // ---- channel ----
@@ -449,6 +466,9 @@ var Enc = (function () {
     b64e: b64e,
     b64d: b64d,
     sha256Hex: sha256Hex,
+    normalizeFingerprint: normalizeFingerprint,
+    pinnedFingerprint: pinnedFingerprint,
+    setPinnedFingerprint: setPinnedFingerprint,
     clearPin: clearPin,
     saveState: saveState,
     loadState: loadState,

@@ -33,6 +33,49 @@ SPLIT_ROOMS_WARNING = (
 )
 
 
+def log_server_identity() -> None:
+    """Print the server's long-term fingerprint at startup.
+
+    The fingerprint is what makes the encrypted channel verifiable: the browser
+    only ever learns it from the same connection it is trying to verify, so on
+    its own it proves nothing. Printing it here gives the operator a way to read
+    it over a channel the client does not control (SSH console, container log,
+    the machine in front of them) and pin it in the UI.
+
+    It is derived from the persisted signing key, so it survives restarts and
+    is identical for every worker.
+    """
+    from app.config import ENC_ENABLED
+
+    if not ENC_ENABLED:
+        return
+    try:
+        from app import enc
+
+        info = enc.status()
+    except Exception as exc:
+        # Never fail startup over a diagnostic: the key is loaded again on the
+        # first handshake, where the real error will surface.
+        logging.getLogger("chat").warning(
+            "could not read the server identity fingerprint: %s", exc)
+        print("WARNING: could not read the server identity fingerprint: " + str(exc),
+              flush=True)
+        return
+
+    fingerprint = info["fingerprint"]
+    logging.getLogger("chat").info("server identity fingerprint: %s", fingerprint)
+    print("\n" + "-" * 72, flush=True)
+    print("Server identity fingerprint (chat-enc-v1 signing key):", flush=True)
+    print("  " + fingerprint, flush=True)
+    print("Verify it over a channel the browser cannot influence (this console,",
+          flush=True)
+    print("the host's logs), then paste it into 'Server identity' in the web UI",
+          flush=True)
+    print("to pin it. Clients that pinned it refuse to connect if it ever changes.",
+          flush=True)
+    print("-" * 72 + "\n", flush=True)
+
+
 def ensure_deps() -> None:
     try:
         import fastapi, uvicorn, cryptography  # noqa: F401
@@ -100,6 +143,7 @@ def main() -> None:
 
     preflight(WORKERS, ALLOW_SPLIT_ROOMS)
     init_db()
+    log_server_identity()
 
     use_tls = bool(SSL_CERTFILE and SSL_KEYFILE)
     scheme = "https" if use_tls else "http"

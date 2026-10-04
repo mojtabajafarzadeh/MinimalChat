@@ -450,8 +450,12 @@ class ResponsiveLayoutTests(unittest.TestCase):
         probe = """
         (() => {
           const form = document.querySelector('.card');
+          // The identity panel is a separate disclosure, not a field, and it
+          // carries its own margin; measuring it here would say nothing about
+          // the form's rhythm.
           const vis = [...form.children].filter(
-            (e) => getComputedStyle(e).display !== 'none');
+            (e) => getComputedStyle(e).display !== 'none' &&
+                   !e.querySelector('.identity'));
           const gaps = [];
           for (let i = 1; i < vis.length; i += 1) {
             const a = vis[i - 1].getBoundingClientRect();

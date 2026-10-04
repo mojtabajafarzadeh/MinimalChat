@@ -8,6 +8,7 @@
 <script src="/static/theme.js"></script>
 <script src="/static/enc.js"></script>
 <script src="/static/api.js"></script>
+<script src="/static/identity.js" defer></script>
 </head>
 <body>
 <button class="btn btn-secondary btn-icon theme-float" data-theme-toggle type="button" aria-label="Toggle dark mode">🌙</button>
@@ -22,6 +23,7 @@
     <div class="alert alert-destructive hidden" id="error" role="alert"></div>
     <button class="btn btn-block" type="submit">Log in</button>
     <p class="switch" id="register-link">No account? <a href="/register">Register</a></p>
+    <div id="identity-panel"></div>
   </form>
 </div>
 <script>
