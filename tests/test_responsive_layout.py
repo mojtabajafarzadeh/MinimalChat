@@ -585,10 +585,11 @@ class ResponsiveLayoutTests(unittest.TestCase):
                                ".getBoundingClientRect().right"), 1,
             "choosing a conversation must reveal it, not leave the drawer open")
 
-    # --------------------------------------------------------------- theming
+    # ------------------------------------------------------------- theming
 
-    def test_theme_toggle_is_legible_in_both_themes(self):
-        """Colour emoji ignore `color`, and the header inverts with the theme."""
+    # Colour emoji ignore `color`, so the glyph has to request text
+    # presentation to inherit the button's colour.
+    def test_theme_toggle_uses_a_text_presentation_glyph(self):
         cookie = self._session_cookie()
         self.page.cookie("session_id", cookie)
         self.page.viewport(390, 844)
@@ -599,14 +600,127 @@ class ResponsiveLayoutTests(unittest.TestCase):
                 "document.querySelector('.chat-header [data-theme-toggle]')"
                 ".textContent")
             self.assertTrue(glyph.strip(), "the toggle needs a glyph")
-            # A variation selector forces text presentation so the glyph
-            # inherits `color` instead of being drawn in its own colours.
             self.assertIn("\ufe0e", glyph,
                           f"glyph {glyph!r} must request text presentation")
             self.page.evaluate(
                 "document.querySelector('.chat-header [data-theme-toggle]').click()")
             time.sleep(0.4)
 
+    # A control's own background is often translucent and `opacity` composites
+    # the whole button, so getComputedStyle reports what was declared rather
+    # than what got painted. Composite the chain up to the header instead, and
+    # compare against that.
+    HEADER_CONTRAST_PROBE = r"""
+    (() => {
+      const parse = (c) => {
+        const m = (c || '').match(/[\d.]+/g);
+        if (!m) return null;
+        return {r: +m[0], g: +m[1], b: +m[2], a: m.length > 3 ? +m[3] : 1};
+      };
+      const lum = (c) => (0.2126*c.r + 0.7152*c.g + 0.0722*c.b) / 255;
+      const ratio = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+      const over = (layer, base) => ({
+        r: layer.r*layer.a + base.r*(1 - layer.a),
+        g: layer.g*layer.a + base.g*(1 - layer.a),
+        b: layer.b*layer.a + base.b*(1 - layer.a)});
+
+      const header = document.querySelector('.chat-header');
+      const headerBg = parse(getComputedStyle(header).backgroundColor);
+      const rows = [];
+      header.querySelectorAll('button, a').forEach((el) => {
+        const text = (el.textContent || '').trim();
+        const cs = getComputedStyle(el);
+        if (!text || cs.display === 'none' || cs.visibility === 'hidden') return;
+
+        let bg = headerBg;
+        for (let n = el; n && n !== header; n = n.parentElement) {
+          const c = parse(getComputedStyle(n).backgroundColor);
+          if (c && c.a > 0) bg = over(c, bg);
+        }
+        let fg = over(parse(cs.color) || {r: 0, g: 0, b: 0, a: 1}, bg);
+        const op = parseFloat(cs.opacity);
+        if (op < 1) fg = over(Object.assign({}, fg, {a: op}), bg);
+
+        rows.push({el: el.id || el.className, text,
+                   contrast: +ratio(lum(fg), lum(bg)).toFixed(2),
+                   color: cs.color, bg: cs.backgroundColor});
+      });
+      return {theme: document.documentElement.getAttribute('data-theme'), rows};
+    })()
+    """
+
+    # WCAG 1.4.3: the labels are characters, not decoration, and at 14px they
+    # are not "large text", so 4.5:1 rather than the 3:1 given to icons.
+    MIN_HEADER_CONTRAST = 4.5
+
+    def _pointer(self, x, y):
+        """Move the real pointer. :hover only engages from real input, so a
+        synthetic mouseover event would leave the computed style untouched and
+        the audit would quietly be measuring the resting state."""
+        self.page.send("Input.dispatchMouseEvent", type="mouseMoved",
+                       x=x, y=y, button="none", clickCount=0)
+        time.sleep(0.25)
+
+    HEADER_CONTROLS = """
+    (() => [...document.querySelectorAll('.chat-header button, .chat-header a')]
+       .filter((e) => getComputedStyle(e).display !== 'none')
+       .map((e) => {
+         const r = e.getBoundingClientRect();
+         return {el: e.id || e.className,
+                 x: r.x + r.width / 2, y: r.y + r.height / 2};
+       }))()
+    """
+
+    def test_every_header_control_is_readable_against_the_header(self):
+        """The header is near-black in *both* themes, so a control that takes
+        --foreground is unreadable in one of them. Nothing about that shows up
+        in the DOM: the button is present, sized, hit-testable and clickable,
+        it just paints nothing. It has to be measured, not asserted about.
+
+        Hover is audited too, because the resting and hovered palettes are
+        separate rule sets and only the resting one is obvious."""
+        cookie = self._session_cookie()
+        self.page.cookie("session_id", cookie)
+        # A phone: at desktop widths the drawer toggle is display:none and
+        # would go unmeasured.
+        self.page.viewport(390, 844)
+        self.page.goto(self.base + "/chat")
+        time.sleep(0.6)
+
+        targets = self.page.evaluate(self.HEADER_CONTROLS)
+        self.assertTrue(targets, "no header controls were found to audit")
+
+        # Off the header entirely, so "at rest" really is at rest.
+        below_header = self.page.evaluate(
+            "document.querySelector('.chat-header').getBoundingClientRect().bottom + 30")
+
+        for theme in ("light", "dark"):
+            for _ in range(2):
+                if self.page.evaluate(
+                        "document.documentElement.getAttribute('data-theme')") == theme:
+                    break
+                self.page.evaluate(
+                    "document.querySelector('[data-theme-toggle]').click()")
+                time.sleep(0.3)
+            for target in targets:
+                for hovered in (False, True):
+                    with self.subTest(theme=theme, control=target["el"],
+                                      hovered=hovered):
+                        self._pointer(*((target["x"], target["y"]) if hovered
+                                        else (4, below_header)))
+                        found = self.page.evaluate(self.HEADER_CONTRAST_PROBE)
+                        self.assertEqual(theme, found["theme"])
+                        rows = {r["el"]: r for r in found["rows"]}
+                        self.assertIn(target["el"], rows,
+                                      f"{target['el']} stopped being measurable")
+                        row = rows[target["el"]]
+                        self.assertGreaterEqual(
+                            row["contrast"], self.MIN_HEADER_CONTRAST,
+                            f"{row['el']} ({row['text']!r}) in {theme} mode"
+                            f"{' while hovered' if hovered else ''}: "
+                            f"{row['color']} on {row['bg']} over the header is "
+                            f"only {row['contrast']}:1, so it is effectively "
+                            f"invisible")
 
 if __name__ == "__main__":
     unittest.main()

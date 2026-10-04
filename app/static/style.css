@@ -271,9 +271,23 @@ body {
 }
 .chat-wrap.wide { max-width: 68rem; }
 
-/* The header inverts against the theme, so the toggle needs its own neutral
-   backdrop to stay legible in both directions. */
-.chat-header .btn-ghost { background: rgb(127 127 127 / 0.18); }
+/* The header does NOT invert with the theme: --header is near-black in both of
+   them, so every control inside it has to take --header-ink. Inheriting
+   --foreground (as .btn-ghost does) put near-black ink on a near-black header
+   in light mode and the theme toggle rendered no distinguishable pixel at all,
+   measured contrast 1.0 -- present in the DOM, clickable, and invisible.
+
+   Hover is a hairline rather than a background wash. The logout button in this
+   same header already uses a 1px border in --header-ink as its affordance, and
+   neither obvious alternative survives: --accent is a light surface in light
+   mode and would swallow light ink, while a white wash over a near-black
+   header drops the label to 3.5:1 while hovered. A border costs the label
+   nothing. */
+.chat-header .btn-ghost { color: var(--header-ink); }
+.chat-header .btn-ghost:hover {
+  background: transparent;
+  border-color: var(--header-ink);
+}
 
 .chat-header {
   display: flex;
@@ -302,8 +316,9 @@ body {
   font-weight: 500;
 }
 .chat-header .logout:hover { background: var(--header-ink); color: var(--header); opacity: 1; }
-.chat-header .icon-btn { background: transparent; border: 1px solid transparent; }
-.chat-header .icon-btn:hover { background: rgb(255 255 255 / .12); }
+/* No .chat-header .icon-btn override: it repeated what .btn-ghost already
+   sets and, sitting later at the same specificity, silently replaced the hover
+   wash above. Duplicating a rule to restate it is how that happened. */
 
 .layout { display: flex; flex: 1; min-height: 0; }
 
