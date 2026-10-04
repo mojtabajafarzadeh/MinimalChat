@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin panel — Minimal Chat</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/theme.js"></script>
+</head>
+<body>
+<button class="theme-float" data-theme-toggle type="button">🌙</button>
+<div class="center">
+  <!-- login view -->
+  <form class="card" id="login-view">
+    <h1>Admin panel</h1>
+    <p class="sub">Restricted area. Attempts are rate-limited.</p>
+    <label for="password">Admin password</label>
+    <input id="password" type="password" autocomplete="current-password" required>
+    <div class="error" id="login-error"></div>
+    <button class="btn" type="submit">Log in</button>
+  </form>
+  <!-- panel view -->
+  <div class="card wide-card hidden" id="panel-view">
+    <div class="admin-head">
+      <div>
+        <h1>Users</h1>
+        <p class="sub" id="user-count"></p>
+      </div>
+      <button class="logout-btn" id="logout" type="button">Logout</button>
+    </div>
+    <form class="admin-add" id="add-form">
+      <input id="add-name" type="text" placeholder="Name" maxlength="64" required>
+      <input id="add-username" type="text" placeholder="username" maxlength="32" required>
+      <input id="add-password" type="password" placeholder="Password" maxlength="128" required>
+      <input id="add-confirm" type="password" placeholder="Confirm" maxlength="128" required>
+      <button type="submit">Add user</button>
+    </form>
+    <div class="error" id="panel-error"></div>
+    <div id="users"></div>
+  </div>
+</div>
+<script>
+(function () {
+  'use strict';
+  const API = './api';
+  const loginView = document.getElementById('login-view');
+  const panelView = document.getElementById('panel-view');
+  const loginErr = document.getElementById('login-error');
+  const panelErr = document.getElementById('panel-error');
+  const usersBox = document.getElementById('users');
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function showError(el, msg) {
+    el.textContent = msg;
+    el.style.display = 'block';
+    setTimeout(() => { el.style.display = 'none'; }, 5000);
+  }
+  function show(view) {
+    loginView.classList.toggle('hidden', view !== 'login');
+    panelView.classList.toggle('hidden', view !== 'panel');
+  }
+
+  async function loadUsers() {
+    const r = await fetch(API + '/users');
+    if (r.status === 401) { show('login'); return; }
+    if (!r.ok) { showError(panelErr, 'Could not load users.'); return; }
+    const users = await r.json();
+    document.getElementById('user-count').textContent = users.length + ' user(s)';
+    usersBox.innerHTML = '';
+    users.forEach((u) => {
+      const row = document.createElement('div');
+      row.className = 'user-row';
+      row.innerHTML =
+        '<div class="user-info"><strong>' + esc(u.name) + '</strong> @' + esc(u.username) +
+        ' <span class="muted">#' + u.id + '</span></div>' +
+        '<input type="password" placeholder="New password" maxlength="128" data-pw>' +
+        '<button data-set>Set password</button>' +
+        '<button data-del class="danger">Delete</button>';
+      const pwInput = row.querySelector('[data-pw]');
+      row.querySelector('[data-set]').addEventListener('click', async () => {
+        const pw = pwInput.value;
+        if (!pw) return;
+        if (!confirm('Set a new password for @' + u.username + '? They will be logged out everywhere.')) return;
+        const fd = new FormData();
+        fd.append('password', pw);
+        fd.append('confirm', pw);
+        const rr = await fetch(API + '/users/' + u.id + '/password', { method: 'POST', body: fd });
+        const data = await rr.json().catch(() => ({}));
+        if (!rr.ok) { showError(panelErr, data.error || 'Failed.'); return; }
+        pwInput.value = '';
+        await loadUsers();
+      });
+      row.querySelector('[data-del]').addEventListener('click', async () => {
+        if (!confirm('Delete @' + u.username + ' and ALL their messages? This cannot be undone.')) return;
+        const rr = await fetch(API + '/users/' + u.id, { method: 'DELETE' });
+        const data = await rr.json().catch(() => ({}));
+        if (!rr.ok) { showError(panelErr, data.error || 'Failed.'); return; }
+        await loadUsers();
+      });
+      usersBox.appendChild(row);
+    });
+    show('panel');
+  }
+
+  loginView.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    loginErr.style.display = 'none';
+    const fd = new FormData();
+    fd.append('password', document.getElementById('password').value);
+    document.getElementById('password').value = '';
+    const r = await fetch(API + '/login', { method: 'POST', body: fd });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { showError(loginErr, data.error || 'Login failed.'); return; }
+    await loadUsers();
+  });
+
+  document.getElementById('add-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData();
+    fd.append('name', document.getElementById('add-name').value.trim());
+    fd.append('username', document.getElementById('add-username').value.trim());
+    fd.append('password', document.getElementById('add-password').value);
+    fd.append('confirm', document.getElementById('add-confirm').value);
+    const r = await fetch(API + '/users', { method: 'POST', body: fd });
+    const data = await r.json().catch(() => ({}));
+    if (r.status === 401) { show('login'); return; }
+    if (!r.ok) { showError(panelErr, data.error || 'Failed.'); return; }
+    e.target.reset();
+    await loadUsers();
+  });
+
+  document.getElementById('logout').addEventListener('click', async () => {
+    try { await fetch(API + '/logout', { method: 'POST' }); } catch (e) {}
+    show('login');
+  });
+
+  loadUsers();
+})();
+</script>
+</body>
+</html>

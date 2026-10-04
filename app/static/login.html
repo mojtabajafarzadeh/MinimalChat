@@ -5,8 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Login — Minimal Chat</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/theme.js"></script>
+<script src="/static/enc.js"></script>
+<script src="/static/api.js"></script>
 </head>
 <body>
+<button class="theme-float" data-theme-toggle type="button">🌙</button>
 <div class="center">
   <form class="card" id="form">
     <h1>Welcome back</h1>
@@ -17,27 +21,31 @@
     <input id="password" type="password" autocomplete="current-password" maxlength="128" required>
     <div class="error" id="error"></div>
     <button class="btn" type="submit">Log in</button>
-    <p class="switch">No account? <a href="/register">Register</a></p>
+    <p class="switch" id="register-link">No account? <a href="/register">Register</a></p>
   </form>
 </div>
 <script>
 const form = document.getElementById('form');
 const err = document.getElementById('error');
+function show(msg) { err.textContent = msg; err.style.display = 'block'; }
+Api.boot().then((st) => {
+  if (!st.config.registration_enabled) {
+    document.getElementById('register-link').style.display = 'none';
+  }
+  return Api.me().then((u) => { location.href = '/chat'; }).catch(() => {});
+}).catch((e) => { show('Encrypted channel unavailable: ' + e.message); });
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   err.style.display = 'none';
-  const fd = new FormData();
-  fd.append('username', document.getElementById('username').value.trim());
-  fd.append('password', document.getElementById('password').value);
+  const btn = form.querySelector('button');
+  btn.disabled = true;
   try {
-    const r = await fetch('/api/login', { method: 'POST', body: fd });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || 'Login failed.');
+    await Api.login(document.getElementById('username').value.trim(),
+                    document.getElementById('password').value);
     location.href = '/chat';
   } catch (ex) {
-    err.textContent = ex.message;
-    err.style.display = 'block';
-  }
+    show(ex.message || 'Login failed.');
+  } finally { btn.disabled = false; }
 });
 </script>
 </body>

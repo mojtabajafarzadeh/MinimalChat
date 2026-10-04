@@ -5,19 +5,44 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Chat room — Minimal Chat</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/theme.js"></script>
+<script src="/static/enc.js"></script>
+<script src="/static/api.js"></script>
 </head>
 <body>
-<div class="chat-wrap">
+<div class="chat-wrap wide">
   <header class="chat-header">
     <span class="me" id="me">…</span>
+    <button class="icon-btn" data-theme-toggle type="button">🌙</button>
     <button class="logout" id="logout">Logout</button>
   </header>
-  <div class="status" id="status">Connecting…</div>
-  <div id="messages"></div>
-  <form class="composer" id="form">
-    <input id="input" type="text" placeholder="Type a message…" maxlength="1000" autocomplete="off">
-    <button type="submit">Send</button>
-  </form>
+  <div id="split-warning" class="split-warning hidden"></div>
+  <div id="security" class="security hidden"></div>
+  <div class="layout">
+    <aside class="sidebar">
+      <button class="conv active" id="btn-public"># Public Chat</button>
+      <div class="side-title">Private messages</div>
+      <form class="dm-start" id="dm-form">
+        <input id="dm-input" type="text" placeholder="@username" maxlength="32" autocomplete="off">
+        <button type="submit" title="Start private chat">Chat</button>
+      </form>
+      <div class="error" id="dm-error"></div>
+      <div id="conversations"></div>
+    </aside>
+    <div class="main">
+      <div class="status" id="status">Connecting…</div>
+      <div class="view-title" id="view-title">Public Chat</div>
+      <div id="messages"></div>
+      <div id="reply-bar" class="reply-bar hidden">
+        <span>Replying to <strong id="reply-to"></strong></span>
+        <button id="reply-cancel" type="button" title="Cancel reply">×</button>
+      </div>
+      <form class="composer" id="form">
+        <input id="input" type="text" placeholder="Type a message…" maxlength="1000" autocomplete="off">
+        <button type="submit">Send</button>
+      </form>
+    </div>
+  </div>
 </div>
 <script src="/static/app.js"></script>
 </body>

@@ -4,6 +4,7 @@ import hmac
 import secrets
 
 from . import db
+from .config import SESSION_LIFETIME_DAYS
 
 ITERATIONS = 200_000
 
@@ -27,6 +28,16 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
+# Valid-format hash used only to equalize login timing when the username
+# does not exist (result is discarded; mitigates user enumeration).
+_DUMMY_HASH = hash_password(secrets.token_hex(16))
+
+
+def dummy_verify(password: str) -> None:
+    """Burn the same PBKDF2 cost as a real check; callers ignore the result."""
+    verify_password(password, _DUMMY_HASH)
+
+
 def create_session(user_id: int) -> str:
     token = secrets.token_hex(32)
     db.execute("INSERT INTO sessions (id, user_id) VALUES (?, ?)", (token, user_id))
@@ -38,10 +49,15 @@ def get_session_user(token: str | None):
         return None
     row = db.query_one(
         "SELECT u.id, u.name, u.username FROM sessions s "
-        "JOIN users u ON u.id = s.user_id WHERE s.id = ?",
-        (token,),
+        "JOIN users u ON u.id = s.user_id WHERE s.id = ? "
+        "AND datetime(s.created_at) > datetime('now', ?)",
+        (token, f"-{SESSION_LIFETIME_DAYS} days"),
     )
-    return dict(row) if row else None
+    if row:
+        return dict(row)
+    # Unknown or expired: opportunistically drop the dead row.
+    db.execute("DELETE FROM sessions WHERE id = ?", (token,))
+    return None
 
 
 def delete_session(token: str | None) -> None:
