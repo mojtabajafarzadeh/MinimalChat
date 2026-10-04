@@ -16,27 +16,30 @@
     <h1>Welcome back</h1>
     <p class="sub">Log in to join the chat.</p>
     <label for="username">Username</label>
-    <input id="username" type="text" autocomplete="username" maxlength="32" required>
+    <input class="input" id="username" type="text" autocomplete="username" maxlength="32" required>
     <label for="password">Password</label>
-    <input id="password" type="password" autocomplete="current-password" maxlength="128" required>
-    <div class="error" id="error"></div>
-    <button class="btn" type="submit">Log in</button>
+    <input class="input" id="password" type="password" autocomplete="current-password" maxlength="128" required>
+    <div class="alert alert-destructive hidden" id="error" role="alert"></div>
+    <button class="btn btn-block" type="submit">Log in</button>
     <p class="switch" id="register-link">No account? <a href="/register">Register</a></p>
   </form>
 </div>
 <script>
 const form = document.getElementById('form');
 const err = document.getElementById('error');
-function show(msg) { err.textContent = msg; err.style.display = 'block'; }
+function show(msg) {
+  err.textContent = msg;
+  err.classList.remove('hidden');   // toggle the class, not style.display
+}
 Api.boot().then((st) => {
   if (!st.config.registration_enabled) {
-    document.getElementById('register-link').style.display = 'none';
+    document.getElementById('register-link').classList.add('hidden');
   }
   return Api.me().then((u) => { location.href = '/chat'; }).catch(() => {});
 }).catch((e) => { show('Encrypted channel unavailable: ' + e.message); });
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  err.style.display = 'none';
+  err.classList.add('hidden');
   const btn = form.querySelector('button');
   btn.disabled = true;
   try {

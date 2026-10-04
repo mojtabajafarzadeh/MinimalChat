@@ -13,20 +13,21 @@
 <div class="chat-wrap wide">
   <header class="chat-header">
     <span class="me" id="me">…</span>
-    <button class="icon-btn" data-theme-toggle type="button">🌙</button>
-    <button class="logout" id="logout">Logout</button>
+    <button class="btn btn-ghost btn-icon icon-btn" data-theme-toggle type="button" aria-label="Toggle dark mode">🌙</button>
+    <button class="logout" id="logout" type="button">Logout</button>
   </header>
-  <div id="split-warning" class="split-warning hidden"></div>
+  <div id="split-warning" class="split-warning hidden" role="status"></div>
   <div id="security" class="security hidden"></div>
   <div class="layout">
     <aside class="sidebar">
       <button class="conv active" id="btn-public"># Public Chat</button>
+      <hr class="separator">
       <div class="side-title">Private messages</div>
       <form class="dm-start" id="dm-form">
-        <input id="dm-input" type="text" placeholder="@username" maxlength="32" autocomplete="off">
-        <button type="submit" title="Start private chat">Chat</button>
+        <input class="input" id="dm-input" type="text" placeholder="@username" maxlength="32" autocomplete="off">
+        <button class="btn btn-secondary btn-sm" type="submit" title="Start private chat">Chat</button>
       </form>
-      <div class="error" id="dm-error"></div>
+      <div class="alert alert-destructive hidden" id="dm-error" role="alert"></div>
       <div id="conversations"></div>
     </aside>
     <div class="main">
@@ -35,11 +36,11 @@
       <div id="messages"></div>
       <div id="reply-bar" class="reply-bar hidden">
         <span>Replying to <strong id="reply-to"></strong></span>
-        <button id="reply-cancel" type="button" title="Cancel reply">×</button>
+        <button id="reply-cancel" type="button" title="Cancel reply" aria-label="Cancel reply">×</button>
       </div>
       <form class="composer" id="form">
-        <input id="input" type="text" placeholder="Type a message…" maxlength="1000" autocomplete="off">
-        <button type="submit">Send</button>
+        <input class="input" id="input" type="text" placeholder="Type a message…" maxlength="1000" autocomplete="off">
+        <button class="btn" type="submit">Send</button>
       </form>
     </div>
   </div>

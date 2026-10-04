@@ -8,16 +8,16 @@
 <script src="/static/theme.js"></script>
 </head>
 <body>
-<button class="theme-float" data-theme-toggle type="button">🌙</button>
+<button class="btn btn-secondary btn-icon theme-float" data-theme-toggle type="button" aria-label="Toggle dark mode">🌙</button>
 <div class="center">
   <!-- login view -->
   <form class="card" id="login-view">
     <h1>Admin panel</h1>
     <p class="sub">Restricted area. Attempts are rate-limited.</p>
     <label for="password">Admin password</label>
-    <input id="password" type="password" autocomplete="current-password" required>
-    <div class="error" id="login-error"></div>
-    <button class="btn" type="submit">Log in</button>
+    <input class="input" id="password" type="password" autocomplete="current-password" required>
+    <div class="alert alert-destructive hidden" id="login-error" role="alert"></div>
+    <button class="btn btn-block" type="submit">Log in</button>
   </form>
   <!-- panel view -->
   <div class="card wide-card hidden" id="panel-view">
@@ -26,16 +26,16 @@
         <h1>Users</h1>
         <p class="sub" id="user-count"></p>
       </div>
-      <button class="logout-btn" id="logout" type="button">Logout</button>
+      <button class="btn btn-outline btn-sm" id="logout" type="button">Logout</button>
     </div>
     <form class="admin-add" id="add-form">
-      <input id="add-name" type="text" placeholder="Name" maxlength="64" required>
-      <input id="add-username" type="text" placeholder="username" maxlength="32" required>
-      <input id="add-password" type="password" placeholder="Password" maxlength="128" required>
-      <input id="add-confirm" type="password" placeholder="Confirm" maxlength="128" required>
-      <button type="submit">Add user</button>
+      <input class="input" id="add-name" type="text" placeholder="Name" maxlength="64" required>
+      <input class="input" id="add-username" type="text" placeholder="username" maxlength="32" required>
+      <input class="input" id="add-password" type="password" placeholder="Password" maxlength="128" required>
+      <input class="input" id="add-confirm" type="password" placeholder="Confirm" maxlength="128" required>
+      <button class="btn" type="submit">Add user</button>
     </form>
-    <div class="error" id="panel-error"></div>
+    <div class="alert alert-destructive hidden" id="panel-error" role="alert"></div>
     <div id="users"></div>
   </div>
 </div>
@@ -54,8 +54,8 @@
   }
   function showError(el, msg) {
     el.textContent = msg;
-    el.style.display = 'block';
-    setTimeout(() => { el.style.display = 'none'; }, 5000);
+    el.classList.remove('hidden');
+    setTimeout(() => { el.classList.add('hidden'); }, 5000);
   }
   function show(view) {
     loginView.classList.toggle('hidden', view !== 'login');
@@ -75,9 +75,9 @@
       row.innerHTML =
         '<div class="user-info"><strong>' + esc(u.name) + '</strong> @' + esc(u.username) +
         ' <span class="muted">#' + u.id + '</span></div>' +
-        '<input type="password" placeholder="New password" maxlength="128" data-pw>' +
-        '<button data-set>Set password</button>' +
-        '<button data-del class="danger">Delete</button>';
+        '<input class="input" type="password" placeholder="New password" maxlength="128" data-pw>' +
+        '<button class="btn btn-secondary btn-sm" data-set>Set password</button>' +
+        '<button class="btn btn-destructive btn-sm" data-del>Delete</button>';
       const pwInput = row.querySelector('[data-pw]');
       row.querySelector('[data-set]').addEventListener('click', async () => {
         const pw = pwInput.value;
@@ -106,7 +106,7 @@
 
   loginView.addEventListener('submit', async (e) => {
     e.preventDefault();
-    loginErr.style.display = 'none';
+    loginErr.classList.add('hidden');
     const fd = new FormData();
     fd.append('password', document.getElementById('password').value);
     document.getElementById('password').value = '';

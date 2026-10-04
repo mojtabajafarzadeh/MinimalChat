@@ -260,6 +260,22 @@ separate password-based session (12h, server-side, `HttpOnly` cookie) — the
 admin is not a chat user. Login attempts are rate-limited. Without
 `ADMIN_PASSWORD` the panel does not exist (all its URLs are 404).
 
+## Frontend
+
+Vanilla HTML/CSS/JS with no build step, no framework and no npm. The
+design system follows shadcn/ui: a token layer (`--background`,
+`--foreground`, `--primary`, `--muted-foreground`, `--border`, `--ring`,
+`--radius`, ...) plus component classes (`.btn` with `primary`/`secondary`/
+`outline`/`ghost`/`destructive` variants, `.input`, `.card`, `.alert`,
+`.badge`, `.separator`), a focus ring in `--ring`, hairline borders and small
+radii, in a neutral (zinc) light/dark palette.
+
+shadcn itself is React + Tailwind source code, so what is reproduced here is
+its design language rather than its components: there is no React, no Tailwind
+and no build step, which keeps the offline Linux bundle self-contained. The
+trade-off is that Radix behaviour primitives (focus trapping, roving tabindex,
+portalled popovers) are hand-written where needed rather than imported.
+
 ## Features
 
 - Registration / login / logout (PBKDF2 password hashing, server sessions)

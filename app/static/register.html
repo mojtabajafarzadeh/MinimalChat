@@ -16,22 +16,25 @@
     <h1>Create account</h1>
     <p class="sub">Pick a username and start chatting.</p>
     <label for="name">Name</label>
-    <input id="name" type="text" autocomplete="name" maxlength="64" required>
+    <input class="input" id="name" type="text" autocomplete="name" maxlength="64" required>
     <label for="username">Username</label>
-    <input id="username" type="text" autocomplete="username" maxlength="32" required>
+    <input class="input" id="username" type="text" autocomplete="username" maxlength="32" required>
     <label for="password">Password</label>
-    <input id="password" type="password" autocomplete="new-password" maxlength="128" required>
+    <input class="input" id="password" type="password" autocomplete="new-password" maxlength="128" required>
     <label for="confirm">Confirm password</label>
-    <input id="confirm" type="password" autocomplete="new-password" maxlength="128" required>
-    <div class="error" id="error"></div>
-    <button class="btn" type="submit">Register</button>
+    <input class="input" id="confirm" type="password" autocomplete="new-password" maxlength="128" required>
+    <div class="alert alert-destructive hidden" id="error" role="alert"></div>
+    <button class="btn btn-block" type="submit">Register</button>
     <p class="switch">Have an account? <a href="/login">Log in</a></p>
   </form>
 </div>
 <script>
 const form = document.getElementById('form');
 const err = document.getElementById('error');
-function show(msg) { err.textContent = msg; err.style.display = 'block'; }
+function show(msg) {
+  err.textContent = msg;
+  err.classList.remove('hidden');
+}
 Api.boot().then((st) => {
   if (!st.config.registration_enabled) {
     show('Registration is disabled on this server.');
@@ -40,7 +43,7 @@ Api.boot().then((st) => {
 }).catch((e) => { show('Encrypted channel unavailable: ' + e.message); });
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  err.style.display = 'none';
+  err.classList.add('hidden');
   const btn = form.querySelector('button');
   btn.disabled = true;
   try {

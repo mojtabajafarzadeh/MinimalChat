@@ -41,9 +41,10 @@
     const when = m.created_at ? ' · ' + esc(m.created_at) : '';
     let html = '';
     if (m.reply_to) {
-      html += '<div class="quote" data-jump="' + m.reply_to.id + '"><span class="q-who">' +
-        esc(m.reply_to.name || m.reply_to.username) + '</span> ' +
-        esc(previewText(m.reply_to.content)) + '</div>';
+      // A real <button>, so the quote is keyboard focusable and announced.
+      html += '<button type="button" class="quote" data-jump="' + m.reply_to.id + '">' +
+        '<span class="q-who">' + esc(m.reply_to.name || m.reply_to.username) + '</span> ' +
+        esc(previewText(m.reply_to.content)) + '</button>';
     }
     html += '<div class="meta"><strong>' + esc(m.name || m.username) + '</strong> @' +
       esc(m.username) + when + '</div><div>' + esc(m.content) + '</div>' +
@@ -276,13 +277,15 @@
     showSplitWarning();
     const box = document.getElementById('security');
     if (!box) return;
-    if (Api.state.mode !== 'enc') { box.style.display = 'none'; return; }
+    if (Api.state.mode !== 'enc') { box.classList.add('hidden'); return; }
     const fp = Api.fingerprint() || '';
     const pin = Api.pinState();
-    box.style.display = 'block';
+    // Assigning className drops the initial `hidden`, which is what shows it.
     box.className = 'security' + (pin === 'changed' ? ' warn' : '');
     box.innerHTML =
-      '<span class="lock" title="End-to-end encrypted transport from this page">🔒</span>' +
+      // "encrypted transport", not end-to-end: the server can still read
+      // stored messages, so do not claim E2EE here.
+      '<span class="lock" title="Encrypted transport from this page">🔒</span>' +
       '<span class="fp" title="Server identity fingerprint (pin your server key to detect MITM)">' +
       esc(fp) + '</span>' +
       '<button class="sec-copy" type="button" title="Copy fingerprint">copy</button>' +
