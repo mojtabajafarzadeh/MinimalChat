@@ -12,14 +12,18 @@
 <body>
 <div class="chat-wrap wide">
   <header class="chat-header">
+    <button class="btn btn-ghost btn-icon sidebar-toggle" id="sidebar-toggle"
+            type="button" aria-label="Show conversations" aria-expanded="false"
+            aria-controls="sidebar">☰</button>
     <span class="me" id="me">…</span>
     <button class="btn btn-ghost btn-icon icon-btn" data-theme-toggle type="button" aria-label="Toggle dark mode">🌙</button>
     <button class="logout" id="logout" type="button">Logout</button>
   </header>
+  <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
   <div id="split-warning" class="split-warning hidden" role="status"></div>
   <div id="security" class="security hidden"></div>
   <div class="layout">
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <button class="conv active" id="btn-public"># Public Chat</button>
       <hr class="separator">
       <div class="side-title">Private messages</div>

@@ -276,6 +276,29 @@ and no build step, which keeps the offline Linux bundle self-contained. The
 trade-off is that Radix behaviour primitives (focus trapping, roving tabindex,
 portalled popovers) are hand-written where needed rather than imported.
 
+### Responsive behaviour
+
+The layout is verified by measuring the rendered page in a real browser at
+320/390/768/1024/1440px, not by reading the stylesheet. Four rules matter:
+
+- **The conversation list is a drawer on phones.** At 600px and below the
+  sidebar becomes a fixed overlay opened by the header's `☰` button, so the
+  message area keeps the full width instead of giving up half the screen to a
+  list. It closes on selection, on `Escape` (returning focus to the button) and
+  on a backdrop tap, and `aria-expanded` tracks its state.
+- **The document never scrolls.** `.main` and `#messages` carry
+  `min-height: 0`, otherwise the pane cannot shrink below its content and the
+  *document* becomes the scroll container, pushing the composer below the fold.
+- **Tap targets are at least 24px tall.** Interactive controls are real
+  `<button>`s, not styled text.
+- **Line length stays readable.** Message bubbles are capped at `36rem`, which
+  bites because the app frame is already capped at `68rem`.
+
+Two details that only a browser shows: the theme toggle uses `U+FE0E` text
+presentation because colour emoji ignore `color` and the header inverts with
+the theme; and heights use `dvh` (with a `vh` fallback) because iOS shrinks the
+viewport when its toolbar hides.
+
 ## Features
 
 - Registration / login / logout (PBKDF2 password hashing, server sessions)
@@ -352,3 +375,21 @@ It covers filesystem/network-mount detection, the startup preflight matrix
 the concurrency guarantees of secret-file creation (threads *and* processes
 must converge on one key, and no reader may see a partial file). CI runs the
 same suite plus a smoke test against a live server.
+
+`tests/test_responsive_layout.py` additionally drives a real headless Chrome
+over the DevTools protocol and asserts there is no sideways scrolling, no
+control under 24px, that the composer stays on screen, that the sidebar drawer
+opens and closes, and that bubbles respect the line-length cap. It needs a
+Chrome/Chromium binary and the `websocket-client` module; when either is absent
+it **skips** rather than pretending to pass, so a bare CI runner still reports
+green. To run it locally:
+
+```bash
+pip install websocket-client   # not a runtime dependency, only for this test
+python -m unittest tests.test_responsive_layout -v
+```
+
+The seeded content is deliberately hostile -- a 400-character token with no
+spaces, a long URL, emoji and a 30-character username -- because an empty room
+does not break narrow layouts and makes the suite look green for the wrong
+reason.

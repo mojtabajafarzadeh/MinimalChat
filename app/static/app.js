@@ -9,6 +9,8 @@
   const titleEl = document.getElementById('view-title');
   const convBox = document.getElementById('conversations');
   const btnPublic = document.getElementById('btn-public');
+  const sidebarToggle = document.getElementById('sidebar-toggle');
+  const sidebarBackdrop = document.getElementById('sidebar-backdrop');
   const dmForm = document.getElementById('dm-form');
   const dmInput = document.getElementById('dm-input');
   const dmError = document.getElementById('dm-error');
@@ -104,6 +106,17 @@
     return m.username === me.username ? m.to : m.username;
   }
 
+  function setSidebar(open) {
+    document.body.classList.toggle('sidebar-open', open);
+    sidebarToggle.setAttribute('aria-expanded', String(open));
+    if (sidebarBackdrop) sidebarBackdrop.hidden = !open;
+  }
+
+  // Picking a conversation on a phone should reveal the conversation.
+  function closeSidebarOnNarrow() {
+    if (window.matchMedia('(max-width: 600px)').matches) setSidebar(false);
+  }
+
   function renderConversations() {
     convBox.innerHTML = '';
     conversations.forEach((c) => {
@@ -111,7 +124,7 @@
       b.className = 'conv' + (view.kind === 'dm' && view.username === c.username ? ' active' : '');
       b.textContent = '@' + c.username;
       b.title = c.name;
-      b.addEventListener('click', () => openDm(c.username));
+      b.addEventListener('click', () => { openDm(c.username); closeSidebarOnNarrow(); });
       convBox.appendChild(b);
     });
     btnPublic.classList.toggle('active', view.kind === 'public');
@@ -238,7 +251,22 @@
 
   document.getElementById('reply-cancel').addEventListener('click', cancelReply);
 
-  btnPublic.addEventListener('click', openPublic);
+  btnPublic.addEventListener('click', () => { openPublic(); closeSidebarOnNarrow(); });
+
+  sidebarToggle.addEventListener('click', () => {
+    setSidebar(!document.body.classList.contains('sidebar-open'));
+  });
+  if (sidebarBackdrop) sidebarBackdrop.addEventListener('click', () => setSidebar(false));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.body.classList.contains('sidebar-open')) {
+      setSidebar(false);
+      sidebarToggle.focus();
+    }
+  });
+  // Leaving the narrow breakpoint must not strand the drawer open.
+  window.matchMedia('(max-width: 600px)').addEventListener('change', (e) => {
+    if (!e.matches) setSidebar(false);
+  });
 
   dmForm.addEventListener('submit', async (e) => {
     e.preventDefault();

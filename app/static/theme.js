@@ -8,7 +8,10 @@
   }
 
   function paint(btn, theme) {
-    btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+    // U+FE0E forces text presentation: colour emoji ignore `color`, and
+    // the header is dark in light mode and light in dark mode, so a
+    // fixed-colour glyph would be unreadable in one of the two.
+    btn.textContent = theme === 'dark' ? '\u2600\uFE0E' : '\u263E\uFE0E';
     btn.setAttribute('aria-label', theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode');
     btn.setAttribute('title', theme === 'dark' ? 'Light mode' : 'Dark mode');
   }
