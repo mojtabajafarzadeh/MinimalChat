@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Launcher for the offline chat-app bundle. No pip / internet needed.
+# Only requirement: Linux x86_64 with python3.12 on PATH.
+set -euo pipefail
+
+SRC="$0"
+while [ -L "$SRC" ]; do
+  LINK="$(readlink "$SRC")"
+  [[ "$LINK" != /* ]] && SRC="$(dirname "$SRC")/$LINK" || SRC="$LINK"
+done
+HERE="$(cd "$(dirname "$SRC")" && pwd)"
+
+export PYTHONPATH="$HERE/lib${PYTHONPATH:+:$PYTHONPATH}"
+export CHAT_DATA_DIR="${CHAT_DATA_DIR:-$HERE/data}"
+mkdir -p "$CHAT_DATA_DIR"
+
+if command -v python3.12 >/dev/null 2>&1; then
+  PY=python3.12
+elif python3 -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 12) else 1)' >/dev/null 2>&1; then
+  PY=python3
+else
+  echo "Error: this package needs Python 3.12 (python3.12) on PATH." >&2
+  echo "خطا: برای اجرای این برنامه پایتون ۳.۱۲ لازم است." >&2
+  exit 1
+fi
+
+exec "$PY" "$HERE/run.py"

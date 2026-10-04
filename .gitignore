@@ -22,6 +22,9 @@ cert/
 *.crt
 # Build outputs: regenerate with `python packaging/build.py`
 dist/
+# Belt-and-braces: a staging tree must never be committed, wherever it lands.
+packaging/chat-app/
+chat-app/
 # Python
 __pycache__/
 *.pyc
