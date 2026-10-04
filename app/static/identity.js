@@ -9,6 +9,12 @@
  * This module is deliberately read-mostly: it shows what the connection
  * presents, what this browser has pinned, and lets a human compare the two. It
  * never pins on its own initiative.
+ *
+ * There is no "forget pin" control on purpose. Pinning the value you just
+ * verified already replaces a stale pin, so that is the recovery path for a
+ * rotated key and for a pin pasted from the wrong server alike. A permanent
+ * one-click way to drop a verified pin would be a quiet downgrade to
+ * trust-on-first-use with nothing to buy in exchange.
  */
 (function () {
   'use strict';
@@ -68,9 +74,6 @@
       return live.code.textContent === '—' ? null : live.code.textContent;
     }));
     var pinned = fingerprintCells('Pinned in this browser', '', null);
-    var forget = el('button', 'btn btn-ghost btn-sm', 'forget pin');
-    forget.type = 'button';
-    pinned.row.appendChild(forget);
 
     var form = el('form', 'identity-form');
     var label = el('label', 'label', 'Fingerprint from a trusted source');
@@ -118,7 +121,7 @@
       var pin = Api.pinnedFingerprint();
       pinned.code.textContent = pin || 'not pinned';
       pinned.code.classList.toggle('is-bad', !!pin && !!value && pin !== value);
-      forget.disabled = !pin;
+      pinned.row.classList.toggle('is-stale', !!pin && !!value && pin !== value);
 
       if (!value) {
         // Plain mode has no server identity to verify.
@@ -149,15 +152,6 @@
     toggle.addEventListener('click', function () {
       userToggled = true;
       setOpen(body.classList.contains('hidden'));
-    });
-
-    forget.addEventListener('click', function () {
-      Api.clearPin();
-      input.value = '';
-      result.textContent = '';
-      result.className = 'identity-result';
-      refresh();
-      toggleHint.textContent = 'pin cleared — reconnect to pin again';
     });
 
     form.addEventListener('submit', function (e) {

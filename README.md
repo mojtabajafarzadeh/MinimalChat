@@ -278,12 +278,17 @@ and takes the expected value to compare against:
   stale pin is kept and shown in red so the two can be compared;
 - spacing, case and separators are normalised, so a value pasted from a
   terminal works;
-- **forget pin** drops the pin; the next connection is trust-on-first-use again.
 
 When the server key changes the panel opens itself, the previous pin is flagged
 and both values are shown side by side. Note that the banner's escape hatch
 ("I verified it — trust and reload") performs *no* verification: it only
 forgets the old pin, so use it after checking the console.
+
+There is deliberately no "forget pin" control. Verifying the new value already
+replaces a stale pin, so a rotated key, a pin pasted from the wrong server, and
+a plain re-pin are all one step — and a permanent one-click way to drop a
+verified pin would be a quiet downgrade to trust-on-first-use with nothing to
+buy in exchange.
 
 The trust-on-first-use pin still happens automatically, so the panel is an
 addition to the MITM check rather than a replacement for it.

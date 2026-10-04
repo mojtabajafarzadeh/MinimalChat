@@ -272,15 +272,44 @@ class VerificationPanelTests(unittest.TestCase):
         self.assertIn("is-ok", classes, "a messy but valid fingerprint was rejected")
         self.assertEqual(self.page.evaluate("Api.pinnedFingerprint()"), live)
 
-    def test_forgetting_the_pin_clears_it(self):
+    def test_a_stale_pin_is_replaced_by_verifying_the_new_value(self):
+        """Why there is no "forget pin" button.
+
+        Every recovery it offered has to work without it, otherwise its removal
+        would strand somebody mid-incident. So: with a pin in place, submitting
+        the correct fingerprint replaces it -- no clearing step in between."""
         self._load_login()
+        stale = self.page.evaluate("Api.pinnedFingerprint()")
+        self.assertTrue(stale)
+        live = self._panel_values()[0]
+        self.assertEqual(self.page.evaluate("Api.pinnedFingerprint()"), live)
+
+        # A value that is not the live one must not silently become the pin.
         self.page.evaluate("document.querySelector('.identity-toggle').click()")
         time.sleep(0.3)
-        self.page.evaluate(
-            "[...document.querySelectorAll('.identity button')]"
-            ".find((b) => b.textContent === 'forget pin').click()")
+        self._submit("B" * 64)
+        self.assertEqual(self.page.evaluate("Api.pinnedFingerprint()"), stale,
+                         "the pin changed even though the value was wrong")
+
+        # Submitting the live value replaces the pin in one step.
+        self._submit(live)
+        classes, _ = self._result()
+        self.assertIn("is-ok", classes)
+        self.assertEqual(self.page.evaluate("Api.pinnedFingerprint()"), live)
+
+    def test_the_panel_offers_no_way_to_drop_a_verified_pin(self):
+        """A permanent one-click downgrade to TOFU has no compensating benefit,
+        so the control must not creep back in unnoticed."""
+        self._load_login()
+        self.page.evaluate("Api.clearPin()")
+        self.page.evaluate("document.querySelector('.identity-toggle').click()")
         time.sleep(0.3)
-        self.assertIsNone(self.page.evaluate("Api.pinnedFingerprint()"))
+        labels = self.page.evaluate(
+            "[...document.querySelectorAll('.identity-body button')]"
+            ".map((b) => b.textContent)")
+        self.assertEqual(
+            labels, ["copy", "Verify and pin"],
+            "the panel should only offer copying and verifying")
 
     def test_rotating_the_key_surfaces_the_change_and_accepts_the_new_value(self):
         """The pin earns its keep here: the new key is shown, the stale one is
