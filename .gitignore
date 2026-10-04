@@ -1,0 +1,30 @@
+# Local secrets / runtime data — never commit
+.chat_secret
+chat.db
+# SQLite WAL sidecar files (contain recent writes; created next to chat.db)
+*.db-wal
+*.db-shm
+*.db-journal
+# Packaged-app data directory (db, keys and their .lock sidecars)
+data/
+# Atomic-write temp files for key creation (app/paths.ensure_secret_file)
+*.tmp.*
+# Lock sidecars created next to secret files
+*.lock
+# Channel keys: committing these exposes the server identity and defeats the
+# fingerprint/TOFU check.
+enc_keys.json
+.env
+# TLS material: never commit private keys
+cert/
+*.pem
+*.key
+*.crt
+# Build outputs: regenerate with `python packaging/build.py`
+dist/
+# Python
+__pycache__/
+*.pyc
+.venv/
+# Editors
+*.swp
