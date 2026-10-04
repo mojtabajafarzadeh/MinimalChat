@@ -149,6 +149,9 @@ body {
 .btn-sm { padding: 0.25rem 0.625rem; font-size: 0.8125rem; border-radius: var(--radius-sm); }
 .btn-icon { width: 2rem; height: 2rem; padding: 0; border-radius: var(--radius-md); }
 .btn-block { width: 100%; }
+/* The submit button is a direct child of the card <form>, so it needs its own
+   space above it: with no margin it touched the field above it. */
+.card .btn-block { margin-top: 1.25rem; }
 
 /* shadcn Input */
 .input {
@@ -159,6 +162,9 @@ body {
   background: transparent;
   padding: 0.5rem 0.75rem;
   font-size: 0.875rem;
+  /* Match .btn's line-height, otherwise inputs come out 34px tall next to
+     38px buttons in the same form. */
+  line-height: 1.25rem;
   font-family: inherit;
   color: var(--foreground);
   transition: border-color .15s, box-shadow .15s;
@@ -182,7 +188,7 @@ body {
   box-shadow: 0 1px 2px rgb(0 0 0 / .04);
 }
 .card h1 { font-size: 1.25rem; font-weight: 600; letter-spacing: -.01em; }
-.card .sub { color: var(--muted-foreground); font-size: .875rem; margin-top: 2px; margin-bottom: 1rem; }
+.card .sub { color: var(--muted-foreground); font-size: .875rem; margin-top: 0.375rem; margin-bottom: 1rem; }
 .card.wide-card { max-width: 44rem; }
 
 .label {
@@ -190,7 +196,10 @@ body {
   font-size: 0.8125rem;
   font-weight: 500;
   color: var(--foreground);
-  margin: 0.875rem 0 0.375rem;
+  /* 16px between fields, 6px between a label and its own input. Without this
+     rule the labels carried no margin at all and consecutive fields sat 2px
+     apart, so a stack of inputs read as one undivided block. */
+  margin: 1rem 0 0.375rem;
 }
 
 /* shadcn Alert */
@@ -202,7 +211,7 @@ body {
   border: 1px solid var(--border);
   padding: 0.625rem 0.875rem;
   font-size: 0.8125rem;
-  margin-top: 0.875rem;
+  margin-top: 1rem;
   background: var(--muted);
   color: var(--foreground);
 }
@@ -230,6 +239,9 @@ body {
 
 .center {
   min-height: 100vh;
+  /* iOS reports 100vh taller than what is on screen while its toolbar is
+     expanded, which would centre the card partly behind the browser UI. */
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;

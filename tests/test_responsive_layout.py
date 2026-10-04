@@ -437,6 +437,63 @@ class ResponsiveLayoutTests(unittest.TestCase):
                     f"a bubble is {round(widest)}px wide at {width}x{height}; "
                     f"past ~36rem the line length stops being readable")
 
+    # ---------------------------------------------------------------- spacing
+
+    # The auth forms share one vertical rhythm. These are the only gaps the
+    # design uses; anything else means a margin was lost or doubled up.
+    RHYTHM_GAPS = (6, 16, 20)
+
+    def test_auth_form_spacing_follows_one_rhythm(self):
+        """Consecutive fields used to sit 2px apart, and the submit button
+        touched the field above it (0px), because the label rule was never
+        applied and inputs carried no margin."""
+        probe = """
+        (() => {
+          const form = document.querySelector('.card');
+          const vis = [...form.children].filter(
+            (e) => getComputedStyle(e).display !== 'none');
+          const gaps = [];
+          for (let i = 1; i < vis.length; i += 1) {
+            const a = vis[i - 1].getBoundingClientRect();
+            const b = vis[i].getBoundingClientRect();
+            gaps.push(Math.round(b.top - a.bottom));
+          }
+          const input = document.querySelector('.input');
+          const button = document.querySelector('.btn-block');
+          return {
+            gaps,
+            inputH: Math.round(input.getBoundingClientRect().height),
+            buttonH: Math.round(button.getBoundingClientRect().height),
+          };
+        })()
+        """
+        allowed = self.RHYTHM_GAPS
+        for path in ("/login", "/register"):
+            for with_error in (False, True):
+                with self.subTest(page=path, error=with_error):
+                    self.page.viewport(1024, 800)
+                    self.page.clear_cookies()
+                    self.page.goto(self.base + path)
+                    time.sleep(0.4)
+                    if with_error:
+                        # The error alert is hidden in the default state, so
+                        # its spacing would otherwise never be measured.
+                        self.page.evaluate(
+                            "(() => { const e = document.getElementById('error');"
+                            " e.textContent = 'Invalid username or password.';"
+                            " e.classList.remove('hidden'); })()")
+                        time.sleep(0.2)
+                    found = self.page.evaluate(probe)
+                    for gap in found["gaps"]:
+                        self.assertTrue(
+                            any(abs(gap - value) <= 1 for value in allowed),
+                            f"{path} (error={with_error}) has a {gap}px gap, "
+                            f"outside the {allowed} rhythm")
+                    self.assertEqual(
+                        found["inputH"], found["buttonH"],
+                        f"{path}: inputs are {found['inputH']}px but the submit "
+                        f"button is {found['buttonH']}px")
+
     # ----------------------------------------------------------------- drawer
 
     def test_sidebar_is_a_drawer_on_phones_and_docked_on_wide_screens(self):
