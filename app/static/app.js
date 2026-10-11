@@ -29,6 +29,8 @@
   // conversation key -> {button, badge, label}, so a badge update never
   // rebuilds the list and never steals focus from someone tabbing through it.
   let convRows = Object.create(null);
+  // Our own messages that have been sent but not yet echoed, oldest first.
+  const pending = [];
 
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -41,6 +43,12 @@
 
   function scrollBottom() {
     list.scrollTop = list.scrollHeight;
+  }
+
+  // Auto-scroll only when the reader is already at the bottom. Jumping down
+  // while someone is reading older messages yanks the view out from under them.
+  function isAtBottom() {
+    return list.scrollHeight - list.scrollTop - list.clientHeight < 60;
   }
 
   function addMessage(m) {
@@ -61,7 +69,39 @@
       '<button class="reply-btn" data-reply="' + m.id + '" type="button">↩ Reply</button>';
     div.innerHTML = html;
     list.appendChild(div);
+    if (isAtBottom()) scrollBottom();
+  }
+
+  /* ---- optimistic send -----------------------------------------------
+     A sent message appears immediately as "sending", then the server's own
+     echo replaces it. The echo is what makes this safe: it carries the real
+     id and created_at, so the confirmed row is rendered from server data
+     exactly like everyone else's. A pending row never enters `seen`, so it
+     can never become a reply target -- a reply cannot point at a message
+     that does not exist on the server yet. */
+  function addPending(text) {
+    const div = document.createElement('div');
+    div.className = 'msg mine pending';
+    div.innerHTML =
+      '<div class="meta"><strong>' + esc(me.name) + '</strong> @' +
+      esc(me.username) + ' · sending…</div><div>' + esc(text) + '</div>';
+    list.appendChild(div);
+    pending.push(div);
     scrollBottom();
+  }
+
+  // The next echo of our own message settles the oldest pending row: each
+  // connection sends its frames in order, and the server awaits them in order
+  // (_ws_loop), so echoes come back in the order they were sent.
+  function settleOldestPending() {
+    const node = pending.shift();
+    if (node) node.remove();
+  }
+
+  function dropAllPending() {
+    if (!pending.length) return;
+    pending.splice(0, pending.length).forEach((n) => n.remove());
+    statusEl.textContent = 'Message not sent — connection lost.';
   }
 
   function startReply(id) {
@@ -174,9 +214,15 @@
       const badge = document.createElement('span');
       badge.className = 'conv-badge hidden';
       badge.setAttribute('aria-hidden', 'true');
+      // Presence dot: purely decorative, so hidden from assistive tech. The
+      // conversation's name never claims someone is online.
+      const dot = document.createElement('span');
+      dot.className = 'conv-online' + (c.online ? '' : ' hidden');
+      dot.setAttribute('aria-hidden', 'true');
       b.appendChild(name);
+      b.appendChild(dot);
       b.appendChild(badge);
-      b.title = c.name;
+      b.title = c.name + (c.online ? ' (online)' : '');
       b.addEventListener('click', () => { openDm(c.username); closeSidebarOnNarrow(); });
       convBox.appendChild(b);
       convRows[key] = { key: key, button: b, badge: badge,
@@ -210,6 +256,7 @@
     titleEl.textContent = 'Public Chat';
     input.placeholder = 'Type a message…';
     list.innerHTML = '';
+    pending.splice(0, pending.length);
     seen = {};
     cancelReply();
     renderConversations();
@@ -224,6 +271,7 @@
     titleEl.textContent = 'Private chat with @' + username;
     input.placeholder = 'Message @' + username + '…';
     list.innerHTML = '';
+    pending.splice(0, pending.length);
     seen = {};
     cancelReply();
     ensureInList(username);
@@ -269,10 +317,15 @@
         if (Api.mode === 'enc') Enc.saveState(Api.channel);
       } else if (status === 'close') {
         statusEl.textContent = 'Disconnected — reconnecting…';
+        dropAllPending();
         setTimeout(connect, Math.min(retryMs, 10000));
         retryMs *= 2;
       } else if (status === 'error' && detail) {
         statusEl.textContent = 'Channel error: ' + detail;
+      } else if (status === 'rejected') {
+        // The server refused this socket on purpose; retrying cannot help.
+        statusEl.textContent = detail || 'Connection refused by the server.';
+        dropAllPending();
       } else if (status === 'heal') {
         // A dropped frame desynchronised the socket; the reconnect heals it.
         statusEl.textContent = 'Reconnecting…';
@@ -288,6 +341,8 @@
     }
     if (m.kind === 'dm') {
       const other = otherParty(m);
+      // Our own echo settles the pending row before it is rendered again.
+      if (me && m.username === me.username) settleOldestPending();
       // may create the row, which paints the badge
       ensureInList(other);
       if (view.kind === 'dm' && view.username === other) {
@@ -300,6 +355,7 @@
       }
       return;
     }
+    if (me && m.username === me.username) settleOldestPending();
     if (view.kind === 'public') addMessage(m);
     else markUnread('public');
   }
@@ -316,10 +372,21 @@
       payload.type = 'public';
     }
     if (pendingReply) payload.reply_to = pendingReply.id;
-    ws.send(payload).catch(() => {});
+    addPending(payload.content);
+    ws.send(payload).catch(dropAllPending);
     input.value = '';
     cancelReply();
     input.focus();
+  });
+
+  // Enter still submits the form; Ctrl/Cmd+Enter is an extra shortcut. The
+  // composer is a single-line <input>, so Shift+Enter inserts no newline --
+  // it just submits, same as a bare Enter.
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      form.requestSubmit();
+    }
   });
 
   document.getElementById('reply-cancel').addEventListener('click', cancelReply);

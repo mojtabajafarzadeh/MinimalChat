@@ -31,10 +31,13 @@ priority is defaults < `.env` file < real environment variables.
 | `DB_BUSY_TIMEOUT_MS` | `10000` | SQLite lock wait before failing (writes retry) |
 | `SSL_CERTFILE` / `SSL_KEYFILE` | empty (plain HTTP) | TLS cert+key for HTTPS/WSS. Local self-signed: `openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 825 -nodes -subj "/CN=127.0.0.1"` |
 | `WS_MAX_SIZE_BYTES` | `65536` | Max WebSocket frame size (DoS guard) |
+| `MAX_SOCKETS_PER_USER` | `5` | Concurrent WebSockets one user may hold. Bounds the connection flood the message rate limit does not |
+| `MAX_SOCKETS_PER_IP` | `20` | Concurrent WebSockets one client IP may hold |
 | `SESSION_LIFETIME_DAYS` | `30` | Absolute session lifetime |
 | `RATE_LOGIN_PER_MIN` / `RATE_REGISTER_PER_MIN` / `RATE_MSG_PER_MIN` | `20` / `30` / `120` | Sliding-window rate limits (per IP / per IP / per user) |
 | `ADMIN_PATH` | `/admin` | Address of the admin panel (letters, numbers, `_`, `-`) |
 | `ADMIN_PASSWORD` | empty (disabled) | Admin panel password. Empty = panel routes are 404. Use a long random value |
+| `ADMIN_PASSWORD_HASH` | empty | PBKDF2 hash of the admin password, preferred over the plaintext above. Wins when both are set |
 | `ENC_ENABLED` | `true` | Application-layer encrypted transport (TLS alternative) |
 | `ENC_SHOW_FINGERPRINT` | `true` | Show/pin the server key fingerprint (the anti-MITM check) |
 | `WORKERS` | `1` | Worker processes. `>1` shares one SQLite database in WAL mode, see below |
@@ -307,6 +310,18 @@ separate password-based session (12h, server-side, `HttpOnly` cookie) — the
 admin is not a chat user. Login attempts are rate-limited. Without
 `ADMIN_PASSWORD` the panel does not exist (all its URLs are 404).
 
+The password can be stored as a PBKDF2 hash instead of plaintext, which is
+preferred: `.env`, `/proc/<pid>/environ` and process listings are all readable
+on a shared host, so a plaintext password there is a credential sitting in the
+open. Generate the hash once:
+
+```bash
+python -c "from app.auth import hash_password; print(hash_password(input()))"
+```
+
+Put it in `ADMIN_PASSWORD_HASH`. That alone is enough to enable the panel; if
+both are set, the hash wins and `ADMIN_PASSWORD` is never compared.
+
 ## Frontend
 
 Vanilla HTML/CSS/JS with no build step, no framework and no npm. The
@@ -374,7 +389,15 @@ WebSocket in `tests/test_unread_badges.py`.
   delivered in real time only to sender + recipient and persist for offline users
 - Replies: hover any message for Reply, quotes show sender + preview —
   click a quote to scroll to the original message (public and private)
+- Optimistic send: your message appears immediately in a faded "sending…" state
+  and is replaced by the server's echo (with its real id and timestamp). If the
+  connection drops first, the row disappears and the status line says so, so a
+  message is never silently lost.
+- Presence: a dot beside each conversation marks who is currently connected.
+  It is per-process, so it is only reported when `WORKERS=1` (the default) —
+  with several workers a user on another worker would look offline.
 - Dark mode with header toggle (preference saved, follows system by default)
+- `Ctrl`/`Cmd`+`Enter` sends from the composer as well as clicking Send
 
 ## Message encryption (at rest — NOT end-to-end)
 

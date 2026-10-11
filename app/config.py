@@ -103,6 +103,15 @@ RATE_REGISTER_PER_MIN = _get_int("RATE_REGISTER_PER_MIN", 30, 1, 10000)
 RATE_MSG_PER_MIN = _get_int("RATE_MSG_PER_MIN", 120, 1, 100000)
 RATE_ADMIN_LOGIN_PER_MIN = _get_int("RATE_ADMIN_LOGIN_PER_MIN", 10, 1, 10000)
 
+# --- WebSocket connection limits (DoS guard) ---
+# The message rate limit bounds how much one socket can SAY, not how many
+# sockets a client can OPEN; without these, a single client can hold thousands
+# of open connections, each one a coroutine plus a row in the peer table.
+# Per user, so one account cannot exhaust the server.
+MAX_SOCKETS_PER_USER = _get_int("MAX_SOCKETS_PER_USER", 5, 1, 1000)
+# Per client IP, which is what actually bounds a flood spread across accounts.
+MAX_SOCKETS_PER_IP = _get_int("MAX_SOCKETS_PER_IP", 20, 1, 10000)
+
 # --- process model ---
 # Number of uvicorn worker processes. 1 is the supported default: SQLite and
 # the WebSocket fan-out are shared safely, and no load balancer is needed.
@@ -128,7 +137,7 @@ ENC_SHOW_FINGERPRINT = _parse_bool(get("ENC_SHOW_FINGERPRINT", "true"), True)
 ENC_HANDSHAKE_PER_MIN = _get_int("ENC_HANDSHAKE_PER_MIN", 120, 5, 100000)
 
 # --- admin panel ---
-# to the default. The panel only exists when ADMIN_PASSWORD is set.
+# to the default. The panel only exists when a password is configured.
 _RESERVED_PATHS = {"/", "/login", "/register", "/chat", "/api", "/static", "/ws"}
 
 
@@ -152,3 +161,9 @@ def _get_admin_path() -> str:
 ADMIN_PATH = _get_admin_path()
 # Empty = admin panel disabled entirely (all its routes return 404).
 ADMIN_PASSWORD = get("ADMIN_PASSWORD", "")
+# Optional PBKDF2 hash of the admin password, so the secret on disk can be a
+# hash instead of the password itself. Generate one with:
+#   python -c "from app.auth import hash_password; print(hash_password(input()))"
+# Set it alongside ADMIN_PASSWORD (or on its own -- a hash alone is enough to
+# authenticate). When present it wins, and ADMIN_PASSWORD is never compared.
+ADMIN_PASSWORD_HASH = get("ADMIN_PASSWORD_HASH", "")

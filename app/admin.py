@@ -2,26 +2,35 @@
 
 Separate from chat-user sessions on purpose: the admin is not a chat user,
 there is no default password, and the whole panel (routes included) only
-exists while ADMIN_PASSWORD is set. Sessions live in SQLite so they keep
+exists while a password is configured. Sessions live in SQLite so they keep
 working when several worker processes share one database. Tokens are never
 logged and expire after ADMIN_SESSION_HOURS.
+
+The password may be given either in plaintext (ADMIN_PASSWORD) or as a PBKDF2
+hash (ADMIN_PASSWORD_HASH). The hash form is preferred: the secret on disk is
+then not itself a credential, which matters because .env, /proc/<pid>/environ
+and process listings are all readable. The hash wins when both are set.
 """
 import hmac
 import secrets
 
-from . import db
-from .config import ADMIN_PASSWORD
+from . import auth, db
+from .config import ADMIN_PASSWORD, ADMIN_PASSWORD_HASH
 
 ADMIN_COOKIE = "admin_session"
 ADMIN_SESSION_HOURS = 12
 
 
 def enabled() -> bool:
-    return bool(ADMIN_PASSWORD)
+    return bool(ADMIN_PASSWORD or ADMIN_PASSWORD_HASH)
 
 
 def verify_password(password: str) -> bool:
-    return hmac.compare_digest(password, ADMIN_PASSWORD) if enabled() else False
+    if ADMIN_PASSWORD_HASH:
+        return auth.verify_password(password, ADMIN_PASSWORD_HASH)
+    if ADMIN_PASSWORD:
+        return hmac.compare_digest(password, ADMIN_PASSWORD)
+    return False
 
 
 def create_session() -> str:

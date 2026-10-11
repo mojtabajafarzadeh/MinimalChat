@@ -364,6 +364,17 @@ body {
 .conv:hover { background: var(--sidebar-hover); }
 .conv.active { background: var(--secondary); color: var(--secondary-foreground); font-weight: 500; }
 
+/* Presence dot. Decorative only -- the row's accessible name says nothing
+   about being online, so this must not depend on colour alone to be useful:
+   it is a shape cue next to the name, not the sole signal. */
+.conv-online {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--primary);
+}
+
 /* Token pair, so the badge inverts with the theme on its own -- the same
    reason it is not a fixed colour. */
 .conv-badge {
@@ -439,6 +450,10 @@ body {
 }
 .msg .meta { font-size: 0.6875rem; color: var(--muted-foreground); margin-bottom: 1px; }
 .msg .meta strong { color: inherit; font-weight: 600; }
+
+/* An optimistic row that has not been echoed yet. Faded, so the difference
+   from a delivered message reads at a glance without needing a label. */
+.msg.pending { opacity: 0.6; }
 
 .quote {
   display: block;

@@ -278,7 +278,16 @@ var Api = (function () {
     var ready = false;
     var queued = [];
     ws.onopen = function () { if (onStatus) onStatus('open'); };
-    ws.onclose = function () { if (onStatus) onStatus('close'); };
+    ws.onclose = function (ev) {
+      // 4429 is the server's per-user/per-IP connection budget. Retrying would
+      // loop forever against a limit this client cannot get under by trying
+      // again, so surface it and stop instead.
+      if (ev && ev.code === 4429) {
+        if (onStatus) onStatus('rejected', 'Too many open connections.');
+        return;
+      }
+      if (onStatus) onStatus('close');
+    };
     ws.onerror = function () { if (onStatus) onStatus('error'); };
     ws.onmessage = function (ev) {
       var raw;

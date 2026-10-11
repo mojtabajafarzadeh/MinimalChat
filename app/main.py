@@ -29,6 +29,8 @@ from .config import (
     ENC_ENABLED,
     ENC_HANDSHAKE_PER_MIN,
     ENC_SHOW_FINGERPRINT,
+    MAX_SOCKETS_PER_IP,
+    MAX_SOCKETS_PER_USER,
     RATE_ADMIN_LOGIN_PER_MIN,
     RATE_LOGIN_PER_MIN,
     RATE_MSG_PER_MIN,
@@ -113,6 +115,11 @@ def _client_ip(request: Request) -> str:
     # Direct connection only. Behind a reverse proxy, rate-limit there —
     # X-Forwarded-For is client-spoofable and must not be trusted here.
     return request.client.host if request.client else "unknown"
+
+
+def _ws_ip(ws: WebSocket) -> str:
+    """Same rule as _client_ip: the socket's peer address, nothing claimed."""
+    return ws.client.host if ws.client else "unknown"
 
 
 def _cookie_secure(request: Request) -> bool:
@@ -420,7 +427,11 @@ def api_conversations(request: Request):
         "GROUP BY u.id ORDER BY last_id DESC",
         (user["id"], user["id"], user["id"]),
     )
-    return [{"id": r["id"], "name": r["name"], "username": r["username"]} for r in rows]
+    # Presence is per-process (see ConnectionManager.online_user_ids), so it is
+    # only reported when there is a single worker to answer the question.
+    online = manager.online_user_ids() if WORKERS == 1 else set()
+    return [{"id": r["id"], "name": r["name"], "username": r["username"],
+             "online": r["id"] in online} for r in rows]
 
 
 @app.get("/api/dm/{username}")
@@ -450,7 +461,8 @@ def api_dm_history(request: Request, username: str, limit: int = 50):
 
 
 # ---------- Admin panel ----------
-# Registered only when ADMIN_PASSWORD is set; otherwise these URLs are 404.
+# Registered only when an admin password is configured; otherwise these URLs
+# are 404.
 
 
 def _require_admin(request: Request):
@@ -765,7 +777,11 @@ async def ws_endpoint(ws: WebSocket):
     if not user:
         await ws.close(code=4401)
         return
-    await manager.connect(ws, user["id"])
+    if await manager.would_exceed(user["id"], MAX_SOCKETS_PER_USER,
+                                  MAX_SOCKETS_PER_IP, _ws_ip(ws)):
+        await manager.reject(ws, 4429)
+        return
+    await manager.connect(ws, user["id"], client_ip=_ws_ip(ws))
     try:
         await _ws_loop(ws, user, json.loads)
     except Exception:
@@ -983,7 +999,11 @@ if ENC_ENABLED:
         if not user:
             await ws.close(code=4401)
             return
-        await manager.connect(ws, user["id"], sid=sid)
+        if await manager.would_exceed(user["id"], MAX_SOCKETS_PER_USER,
+                                      MAX_SOCKETS_PER_IP, _ws_ip(ws)):
+            await manager.reject(ws, 4429)
+            return
+        await manager.connect(ws, user["id"], sid=sid, client_ip=_ws_ip(ws))
         # Per-socket keys: a reloaded page opens a new socket while the old one
         # may still be registered, so counters must not be shared across sockets.
         salt, ws_c2s, ws_s2c = enc.new_socket_material(sid)
