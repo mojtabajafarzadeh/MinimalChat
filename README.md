@@ -25,6 +25,7 @@ priority is defaults < `.env` file < real environment variables.
 | Variable | Default | Description |
 |---|---|---|
 | `HOST` | `127.0.0.1` | Listen address |
+| `PIP_INDEX_URL` | empty (PyPI) | Package index for the one-off dependency install in `run.py`. The running app never uses it |
 | `PORT` | `8001` | Listen port |
 | `REGISTRATION_ENABLED` | `true` | `false` closes registration (existing users unaffected; register page redirects to login, API returns 403) |
 | `CHAT_DATA_DIR` | project root | Directory for `chat.db` + `.chat_secret` |
@@ -45,6 +46,21 @@ priority is defaults < `.env` file < real environment variables.
 | `CHAT_ENCRYPTION_KEY` | auto `.chat_secret` | Fernet key for message storage |
 
 `.env` is git-ignored (may hold secrets); `.env.example` documents all options.
+
+### Installing from a mirror
+
+`run.py` installs dependencies automatically on first run. By default that goes
+to PyPI. Set `PIP_INDEX_URL` in `.env` (or as a real environment variable, which
+wins) to use an internal mirror instead:
+
+```
+PIP_INDEX_URL=https://artifactory.example.com/api/pypi/pypi/simple
+```
+
+Leave it unset and pip uses its own default, which is PyPI. The mirror is only
+consulted by that one-off install — the running application never makes an
+outbound connection. Nothing is installed at all once the dependencies are
+present, and the offline bundle's `install.sh` never installs anything.
 
 ## Process model (workers)
 

@@ -38,8 +38,15 @@ def _load_dotenv(path: Path | str) -> dict:
             continue
         key, _, val = line.partition("=")
         key, val = key.strip(), val.strip()
-        if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
-            val = val[1:-1]
+        if val[:1] in ("'", '"'):
+            # Quoted: a '#' inside the quotes is part of the value, not a
+            # comment. The closing quote wins even if a comment follows it.
+            quote = val[0]
+            end = val.find(quote, 1)
+            if end > 0:
+                val = val[1:end]
+            else:
+                val = val[1:].split("#", 1)[0].strip()
         elif "#" in val:  # trailing comment outside quotes
             val = val.split("#", 1)[0].rstrip()
         if key and key not in os.environ and key not in values:

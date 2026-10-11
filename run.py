@@ -18,11 +18,47 @@ would silently break:
    sticky-session proxy that keeps each client on one worker).
 """
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+
+
+def _load_dotenv(path) -> dict:
+    """Minimal KEY=VALUE reader for the one setting needed before install.
+
+    Duplicated from app.config on purpose: ensure_deps() has to run before the
+    app package is importable (that is the whole point -- the deps may not be
+    installed yet). Real environment variables still win over the file.
+    """
+    values: dict = {}
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return values
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip()
+        if val[:1] in ("'", '"'):
+            # Quoted: a '#' inside the quotes is part of the value, not a
+            # comment. Closing quote wins, even if a comment follows it.
+            quote = val[0]
+            end = val.find(quote, 1)
+            if end > 0:
+                val = val[1:end]
+            else:
+                val = val[1:].split("#", 1)[0].strip()
+        elif "#" in val:
+            val = val.split("#", 1)[0].rstrip()
+        if key and key not in os.environ and key not in values:
+            values[key] = val
+    return values
+
 
 # Shown in the startup log, the UI and the README when the operator has
 # deliberately accepted per-worker rooms.
@@ -77,14 +113,33 @@ def log_server_identity() -> None:
     print("-" * 72 + "\n", flush=True)
 
 
+def _pip_index_args() -> list:
+    """Index arguments for pip, from PIP_INDEX_URL (env or .env).
+
+    Unset or blank means PyPI, which is pip's own default -- so the flag is
+    omitted entirely rather than passed as empty. The variable is read with
+    the same stdlib .env reader app.config uses, because ensure_deps() runs
+    before app.config is importable.
+    """
+    raw = os.environ.get("PIP_INDEX_URL", "")
+    if not raw.strip():
+        raw = _load_dotenv(ROOT / ".env").get("PIP_INDEX_URL", "")
+    raw = raw.strip()
+    return ["--index-url", raw] if raw else []
+
+
 def ensure_deps() -> None:
     try:
         import fastapi, uvicorn, cryptography  # noqa: F401
         return
     except ImportError:
-        print("Installing dependencies (fastapi, uvicorn, cryptography)...")
+        index = _pip_index_args()
+        where = index[1] if index else "PyPI (default)"
+        print(f"Installing dependencies (fastapi, uvicorn, cryptography) "
+              f"from {where}...")
         subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "-i", "https://mirror.ferdowsi.cloud/artifactory/api/pypi/pip-virtual/simple", '-r', str(ROOT / "requirements.txt")]
+            [sys.executable, "-m", "pip", "install", *index,
+             '-r', str(ROOT / "requirements.txt")]
         )
 
 
