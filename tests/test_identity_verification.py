@@ -327,7 +327,7 @@ class VerificationPanelTests(unittest.TestCase):
         self.assertNotEqual(new, old, "the key was not actually replaced")
 
         self._load_login()
-        self.assertTrue(self.page.evaluate("Api.state.identityChanged"),
+        self.assertTrue(self.page.evaluate("Api.identityChanged"),
                         "the client did not notice the identity change")
         self.assertTrue(
             self.page.evaluate("!!document.getElementById('identity-warning')"),

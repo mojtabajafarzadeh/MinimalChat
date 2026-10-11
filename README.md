@@ -291,7 +291,11 @@ verified pin would be a quiet downgrade to trust-on-first-use with nothing to
 buy in exchange.
 
 The trust-on-first-use pin still happens automatically, so the panel is an
-addition to the MITM check rather than a replacement for it.
+addition to the MITM check rather than a replacement for it. Note the limit of
+that: TOFU cannot detect a MITM on the *very first* connection, because there
+is nothing yet to compare against. The panel says "not verified yet" for exactly
+that state — paste the fingerprint from the server log to turn a TOFU pin into
+a verified one, after which any change to it is caught.
 
 ## Admin panel
 

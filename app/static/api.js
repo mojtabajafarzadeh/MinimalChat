@@ -45,16 +45,21 @@ var Api = (function () {
   function notifyIdentity() {
     try {
       document.dispatchEvent(new CustomEvent('chat:identity'));
-    } catch (e) { /* older browsers */ }
+    } catch (e) {
+      // Only ignore errors from older browsers lacking CustomEvent support.
+      // Other errors (e.g., null document, security policy) should surface.
+      if (e instanceof TypeError && /CustomEvent/.test(e.message)) {
+        return;
+      }
+      throw e;
+    }
   }
 
   function handshake() {
     var ch = new Enc.Channel();
-    // Published before the handshake resolves on purpose. An identity change
-    // makes handshake() reject, and that is precisely when the operator needs
-    // to see and check the fingerprint the server is presenting -- so the
-    // channel is recorded either way. `state.mode` is only set on success, so
-    // nothing can mistake a half-built channel for a usable one.
+    // Store the channel before handshake so that if identity changes,
+    // the new fingerprint is available in Api.fingerprint() for the panel.
+    // The channel is NOT usable for encryption until handshake succeeds.
     state.channel = ch;
     return ch.handshake(handshakeJson).then(function () {
       state.mode = 'enc';
@@ -96,12 +101,6 @@ var Api = (function () {
     document.body.appendChild(bar);
   }
 
-  function trustNewIdentity() {
-    Enc.clearPin();
-    Enc.clearState();
-    if (location.reload) location.reload();
-  }
-
   /* ---------- boot ---------- */
 
   function boot() {
@@ -134,6 +133,13 @@ var Api = (function () {
       trustNewIdentity);
   }
 
+  function trustNewIdentity() {
+    Enc.clearPin();
+    Enc.clearState();
+    state.identityChanged = false;
+    if (location.reload) location.reload();
+  }
+
   function startChannel() {
     var saved = Enc.loadState();
     if (!saved) return handshake();
@@ -152,7 +158,9 @@ var Api = (function () {
       notifyIdentity();
       return state;
     }, function (err) {
-      if (err && typeof err.status === 'number') {
+      // Only treat 401/403 as "not logged in" — other numeric statuses (500, 429, etc.)
+      // indicate a real server/channel problem, so we must not pretend the channel is healthy.
+      if (err && (err.status === 401 || err.status === 403)) {
         // Channel is healthy, the user simply is not logged in yet.
         state.channel = restored;
         state.mode = 'enc';
@@ -367,10 +375,20 @@ var Api = (function () {
                         'key changed or something is intercepting this ' +
                         'connection. Nothing has been pinned.' };
     }
-    Enc.setPinnedFingerprint(live);
-    return { ok: true, live: live, pinned: live,
+    Enc.setPinnedFingerprint(normalized);
+    // Identity has been verified; clear the changed flag so the panel doesn't
+    // auto-open on every subsequent chat:identity event.
+    state.identityChanged = false;
+    return { ok: true, live: live, pinned: normalized,
              message: 'Verified and pinned. This browser will now refuse to ' +
                       'connect if the server identity ever changes.' };
+  }
+
+  function clearPin() {
+    Enc.clearPin();
+    // Coordinate with wrapper state: clear the identityChanged flag so
+    // the panel doesn't auto-open on the next chat:identity event.
+    state.identityChanged = false;
   }
 
   return {
@@ -384,11 +402,15 @@ var Api = (function () {
     users: users,
     dmHistory: dmHistory,
     openSocket: openSocket,
-    state: state,
+    // Expose only getters for internal state, not the mutable object itself
+    get mode() { return state.mode; },
+    get channel() { return state.channel; },
+    get config() { return state.config; },
+    get identityChanged() { return state.identityChanged; },
     fingerprint: fingerprint,
     pinState: pinState,
     pinnedFingerprint: pinnedFingerprint,
     verifyFingerprint: verifyFingerprint,
-    clearPin: Enc.clearPin,
+    clearPin: clearPin,
   };
 })();

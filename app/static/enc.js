@@ -103,7 +103,11 @@ var Enc = (function () {
   }
 
   function pinnedFingerprint() {
-    try { return localStorage.getItem(PIN_KEY); } catch (e) { return null; }
+    try {
+      var val = localStorage.getItem(PIN_KEY);
+      // Treat empty string as null (corrupted pin)
+      return val === '' ? null : val;
+    } catch (e) { return null; }
   }
 
   function setPinnedFingerprint(fp) {
@@ -127,6 +131,12 @@ var Enc = (function () {
   function pinStatus(serverFp) {
     var known = pinnedFingerprint();
     if (!known) {
+      // TOFU on first sight. This is a deliberate, documented trade-off: it
+      // cannot detect a MITM on the very first connection, but removing it
+      // would leave the browser with NO pin at all, and an absent pin means
+      // `pinStatus` answers 'new' forever -- so a later key change would go
+      // completely undetected. The pin panel is how the operator upgrades that
+      // first-contact pin into a verified one.
       setPinnedFingerprint(serverFp);
       return 'new';
     }
@@ -474,9 +484,9 @@ var Enc = (function () {
     loadState: loadState,
     clearState: clearState,
     pinState: function (fp) {
-      var known = null;
-      try { known = localStorage.getItem(PIN_KEY); } catch (e) {}
-      return known ? (known === fp ? 'ok' : 'changed') : 'new';
+      var known = pinnedFingerprint();
+      if (known === null) return 'new';
+      return known === fp ? 'ok' : 'changed';
     }
   };
 })();

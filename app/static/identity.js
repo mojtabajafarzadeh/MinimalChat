@@ -117,11 +117,13 @@
 
     function refresh() {
       var value = liveFingerprint();
-      live.code.textContent = value || '—';
+      // null/undefined = no fingerprint yet; empty string = server bug, show it
+      live.code.textContent = (value === null || value === undefined) ? '—' : value;
       var pin = Api.pinnedFingerprint();
-      pinned.code.textContent = pin || 'not pinned';
-      pinned.code.classList.toggle('is-bad', !!pin && !!value && pin !== value);
-      pinned.row.classList.toggle('is-stale', !!pin && !!value && pin !== value);
+      // null = not pinned; empty string = corrupted pin, show it
+      pinned.code.textContent = (pin === null || pin === undefined) ? 'not pinned' : pin;
+      pinned.code.classList.toggle('is-bad', pin !== null && value !== null && pin !== value);
+      pinned.row.classList.toggle('is-stale', pin !== null && value !== null && pin !== value);
 
       if (!value) {
         // Plain mode has no server identity to verify.
@@ -133,7 +135,7 @@
       var state = Api.pinState();
       toggleHint.textContent =
         state === 'changed' ? 'changed — verify'
-        : state === 'new' ? 'pinned automatically'
+        : state === 'new' ? 'not verified yet'
         : 'pinned';
       toggleHint.className = 'identity-toggle-hint' +
         (state === 'changed' ? ' is-bad' : '');
@@ -182,7 +184,7 @@
 
     function react() {
       refresh();
-      if (!userToggled && Api.state && Api.state.identityChanged) setOpen(true);
+      if (!userToggled && Api.identityChanged) setOpen(true);
     }
   }
 

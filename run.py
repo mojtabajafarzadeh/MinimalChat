@@ -33,6 +33,10 @@ SPLIT_ROOMS_WARNING = (
 )
 
 
+# Module-level logger (pattern used elsewhere in the codebase)
+log = logging.getLogger("chat")
+
+
 def log_server_identity() -> None:
     """Print the server's long-term fingerprint at startup.
 
@@ -56,22 +60,19 @@ def log_server_identity() -> None:
     except Exception as exc:
         # Never fail startup over a diagnostic: the key is loaded again on the
         # first handshake, where the real error will surface.
-        logging.getLogger("chat").warning(
-            "could not read the server identity fingerprint: %s", exc)
+        log.warning("could not read the server identity fingerprint: %s", exc)
         print("WARNING: could not read the server identity fingerprint: " + str(exc),
               flush=True)
         return
 
     fingerprint = info["fingerprint"]
-    logging.getLogger("chat").info("server identity fingerprint: %s", fingerprint)
+    log.info("server identity fingerprint: %s", fingerprint)
     print("\n" + "-" * 72, flush=True)
     print("Server identity fingerprint (chat-enc-v1 signing key):", flush=True)
     print("  " + fingerprint, flush=True)
-    print("Verify it over a channel the browser cannot influence (this console,",
-          flush=True)
-    print("the host's logs), then paste it into 'Server identity' in the web UI",
-          flush=True)
-    print("to pin it. Clients that pinned it refuse to connect if it ever changes.",
+    print("Verify it over a channel the browser cannot influence (this console, "
+          "the host's logs), then paste it into 'Server identity' in the web UI "
+          "to pin it. Clients that pinned it refuse to connect if it ever changes.",
           flush=True)
     print("-" * 72 + "\n", flush=True)
 

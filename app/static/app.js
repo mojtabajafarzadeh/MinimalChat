@@ -29,7 +29,6 @@
   // conversation key -> {button, badge, label}, so a badge update never
   // rebuilds the list and never steals focus from someone tabbing through it.
   let convRows = Object.create(null);
-  const pubBadge = btnPublic.querySelector('.conv-badge');
 
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -184,6 +183,8 @@
                         label: 'Private chat with @' + c.username };
     });
     // # Public Chat is static markup, but it is a conversation like any other.
+    // Query pubBadge here (after any potential DOM changes) so it's never null.
+    const pubBadge = btnPublic.querySelector('.conv-badge');
     convRows.public = { key: 'public', button: btnPublic, badge: pubBadge,
                         label: 'Public Chat' };
     btnPublic.classList.toggle('active', view.kind === 'public');
@@ -196,7 +197,8 @@
   }
 
   function ensureInList(username) {
-    if (!conversations.some((c) => c.username === username)) {
+    const lower = String(username).toLowerCase();
+    if (!conversations.some((c) => c.username.toLowerCase() === lower)) {
       conversations.unshift({ username: username, name: username });
       renderConversations();
     }
@@ -261,10 +263,10 @@
   function connect() {
     ws = Api.openSocket(handleFrame, (status, detail) => {
       if (status === 'open') {
-        statusEl.textContent = Api.state.mode === 'enc'
+        statusEl.textContent = Api.mode === 'enc'
           ? 'Connected (encrypted)' : 'Connected';
         retryMs = 1000;
-        if (Api.state.mode === 'enc') Enc.saveState(Api.state.channel);
+        if (Api.mode === 'enc') Enc.saveState(Api.channel);
       } else if (status === 'close') {
         statusEl.textContent = 'Disconnected — reconnecting…';
         setTimeout(connect, Math.min(retryMs, 10000));
@@ -363,7 +365,7 @@
   function showSplitWarning() {
     const box = document.getElementById('split-warning');
     if (!box) return;
-    const cfg = Api.state.config || {};
+    const cfg = Api.config || {};
     if (!cfg.split_rooms) { box.classList.add('hidden'); return; }
     box.classList.remove('hidden');
     box.textContent =
@@ -376,7 +378,7 @@
     showSplitWarning();
     const box = document.getElementById('security');
     if (!box) return;
-    if (Api.state.mode !== 'enc') { box.classList.add('hidden'); return; }
+    if (Api.mode !== 'enc') { box.classList.add('hidden'); return; }
     const fp = Api.fingerprint() || '';
     const pin = Api.pinState();
     // Assigning className drops the initial `hidden`, which is what shows it.

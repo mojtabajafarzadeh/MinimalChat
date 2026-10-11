@@ -104,6 +104,21 @@ def _fingerprint(pub: bytes) -> str:
     return " ".join(digest[i:i + 4] for i in range(0, len(digest), 4))
 
 
+def normalize_fingerprint(text: str) -> str | None:
+    """
+    Normalize a fingerprint string to the canonical grouped form (4-char groups).
+    Matches the JavaScript Enc.normalizeFingerprint behavior.
+    Returns None if the input is not a valid 64-hex-char fingerprint.
+    """
+    if not isinstance(text, str):
+        return None
+    # Strip all non-hex characters
+    hex_str = "".join(ch for ch in text.upper() if ch in "0123456789ABCDEF")
+    if len(hex_str) != 64:
+        return None
+    return " ".join(hex_str[i:i + 4] for i in range(0, 64, 4))
+
+
 def _build_key_json() -> bytes:
     dh = ec.generate_private_key(ec.SECP256R1())
     sig = ec.generate_private_key(ec.SECP256R1())
