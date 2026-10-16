@@ -31,6 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_responsive_layout import _free_port, _wait_http
 
+from testsupport import reload_settings, settings_env
+
 
 class AdminPanelTests(unittest.TestCase):
     """One server per configuration."""
@@ -171,19 +173,8 @@ class AdminPathCollisionTests(unittest.TestCase):
     """ADMIN_PATH must not shadow another feature's route family."""
 
     def _resolve(self, value):
-        import importlib
-        from app import config
-        old = os.environ.get("ADMIN_PATH")
-        try:
-            os.environ["ADMIN_PATH"] = value
-            importlib.reload(config)
+        with settings_env(ADMIN_PATH=value) as config:
             return config.ADMIN_PATH
-        finally:
-            if old is None:
-                os.environ.pop("ADMIN_PATH", None)
-            else:
-                os.environ["ADMIN_PATH"] = old
-            importlib.reload(config)
 
     def test_enc_is_refused(self):
         """Admin routes register before the encrypted bridge, so /enc would

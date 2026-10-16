@@ -23,6 +23,7 @@ from app.security import (
     is_trusted_proxy,
     trusted_proxies,
 )
+from testsupport import reload_settings, settings_env
 
 
 class DirectConnectionTests(unittest.TestCase):
@@ -132,24 +133,11 @@ class ConfigWiringTests(unittest.TestCase):
     """The setting has to be read from the environment and applied."""
 
     def test_config_parses_a_comma_separated_list(self):
-        import importlib
-        import os
-        from app import config
-        saved = os.environ.get("TRUSTED_PROXY_CIDRS")
-        try:
-            os.environ["TRUSTED_PROXY_CIDRS"] = "127.0.0.1, 10.0.0.0/8 ,"
-            importlib.reload(config)
-            self.assertEqual(config.TRUSTED_PROXY_CIDRS,
+        with settings_env(TRUSTED_PROXY_CIDRS="127.0.0.1, 10.0.0.0/8 ,") as cfg:
+            self.assertEqual(cfg.TRUSTED_PROXY_CIDRS,
                              ["127.0.0.1", "10.0.0.0/8"])
-        finally:
-            if saved is None:
-                os.environ.pop("TRUSTED_PROXY_CIDRS", None)
-            else:
-                os.environ["TRUSTED_PROXY_CIDRS"] = saved
-            importlib.reload(config)
 
     def test_it_defaults_to_empty(self):
-        import importlib
         from app import config
         self.assertIsInstance(config.TRUSTED_PROXY_CIDRS, list)
         configure_trusted_proxies(config.TRUSTED_PROXY_CIDRS)

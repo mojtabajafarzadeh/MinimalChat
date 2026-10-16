@@ -32,6 +32,7 @@ from test_responsive_layout import _free_port, _wait_http
 
 from app.admin import verify_password
 from app.auth import hash_password
+from testsupport import reload_settings, settings_env
 
 
 def _close_code(exc):
@@ -192,30 +193,15 @@ class AdminPasswordHashTests(unittest.TestCase):
     def _with_env(self, check, **env):
         """Run `check(admin_module)` with ADMIN_PASSWORD[_HASH] set to `env`.
 
-        admin.py reads its settings at import time, so the module is reloaded
-        around the call. The assertion runs INSIDE that window: returning the
-        module would hand back one that has already been reloaded back to the
-        ambient environment.
+        admin.py binds its settings at import time, so the module has to be
+        rebuilt around the call -- and rebuilt via settings_env, which keeps
+        sys.modules consistent (see tests/testsupport.py). A bare reload() here
+        would break whichever unrelated test ran next.
         """
-        import importlib
+        import app.admin
 
-        from app import config
-        import app.admin as admin_mod
-        saved = {k: os.environ.get(k) for k in env}
-        try:
-            for k, v in env.items():
-                os.environ[k] = v
-            importlib.reload(config)
-            importlib.reload(admin_mod)
-            check(admin_mod)
-        finally:
-            for k, v in saved.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
-            importlib.reload(config)
-            importlib.reload(admin_mod)
+        with settings_env(**env):
+            check(sys.modules["app.admin"])
 
     def test_a_hash_authenticates_the_right_password_and_rejects_others(self):
         h = hash_password("correct horse battery staple")

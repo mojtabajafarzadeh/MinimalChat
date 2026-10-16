@@ -24,11 +24,7 @@ class SessionTestBase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="chat-sessions-"))
         os.environ["CHAT_DATA_DIR"] = str(self.tmp)
-        for name in ("app.config", "app.db", "app.auth"):
-            sys.modules.pop(name, None)
-        self.config = importlib.import_module("app.config")
-        self.db = importlib.import_module("app.db")
-        self.auth = importlib.import_module("app.auth")
+        self._reload(CHAT_DATA_DIR=str(self.tmp))
         self.db.DB_PATH = self.tmp / "chat.db"
         self.db.init_db()
         self.user_id = self.db.execute(
@@ -37,10 +33,24 @@ class SessionTestBase(unittest.TestCase):
 
     def tearDown(self):
         os.environ.pop("CHAT_DATA_DIR", None)
-        for name in ("app.config", "app.db", "app.auth"):
-            sys.modules.pop(name, None)
+        # Re-import rather than just dropping the entries: popping without
+        # re-importing leaves the parent package pointing at modules that are
+        # no longer in sys.modules, and the next test's importlib.reload()
+        # then fails with "module app.config not in sys.modules" -- which
+        # showed up as an unrelated test erroring under `unittest discover`.
+        self._reload()
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _reload(self, **env):
+        """Rebuild the app modules against the current environment."""
+        for name in ("app.config", "app.db", "app.auth", "app.main"):
+            sys.modules.pop(name, None)
+        self.config = importlib.import_module("app.config")
+        self.db = importlib.import_module("app.db")
+        self.auth = importlib.import_module("app.auth")
+        for key, value in env.items():
+            os.environ[key] = value
 
     def _age(self, token, **columns):
         """Backdate a session row."""
