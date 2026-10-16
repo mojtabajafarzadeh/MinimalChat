@@ -42,12 +42,15 @@ from .config import (
     RATE_MSG_PER_MIN,
     RATE_REGISTER_PER_MIN,
     REGISTRATION_ENABLED,
+    TRUSTED_PROXY_CIDRS,
     WORKERS,
 )
 from .security import (
     ChannelOnlyMiddleware,
     SecurityHeadersMiddleware,
     check_rate_limit,
+    client_ip,
+    configure_trusted_proxies,
     origin_allowed,
 )
 from .websocket import manager
@@ -71,6 +74,17 @@ UNDECRYPTABLE = "[message unavailable — decryption failed]"
 @app.on_event("startup")
 def startup() -> None:
     db.init_db()
+    configure_trusted_proxies(TRUSTED_PROXY_CIDRS)
+    if TRUSTED_PROXY_CIDRS:
+        log.info("trusting X-Forwarded-For from: %s",
+                 ", ".join(TRUSTED_PROXY_CIDRS))
+    try:
+        dropped = auth.purge_expired_sessions()
+        if dropped:
+            log.info("purged %d expired session(s)", dropped)
+    except Exception:
+        # A diagnostic must not stop the server from serving.
+        log.warning("could not purge expired sessions", exc_info=True)
 
 
 # ---------- helpers ----------
@@ -131,14 +145,21 @@ def valid_username(v: str) -> bool:
 
 
 def _client_ip(request: Request) -> str:
-    # Direct connection only. Behind a reverse proxy, rate-limit there —
-    # X-Forwarded-For is client-spoofable and must not be trusted here.
-    return request.client.host if request.client else "unknown"
+    """Rate-limit key: the peer address, unless a trusted proxy is configured.
+
+    X-Forwarded-For is client-spoofable, so it is ignored unless the request
+    actually arrived from an address in TRUSTED_PROXY_CIDRS — otherwise a
+    client could rotate its own key and walk straight through every limit.
+    See security.client_ip() for the rightmost-untrusted-hop walk.
+    """
+    peer = request.client.host if request.client else "unknown"
+    return client_ip(peer, request.headers.get("x-forwarded-for"))
 
 
 def _ws_ip(ws: WebSocket) -> str:
-    """Same rule as _client_ip: the socket's peer address, nothing claimed."""
-    return ws.client.host if ws.client else "unknown"
+    """Same rule as _client_ip."""
+    peer = ws.client.host if ws.client else "unknown"
+    return client_ip(peer, ws.headers.get("x-forwarded-for"))
 
 
 def _cookie_secure(request: Request) -> bool:
@@ -937,9 +958,14 @@ async def _enc_authenticated_call(request: Request, logical: str) -> JSONRespons
     resp = JSONResponse({"e": sealed})
     if gate_cookie:
         # Page gate only; useless without the channel keys (see ENC_COOKIE).
-        resp.set_cookie(ENC_COOKIE, sid, httponly=True, samesite="lax")
+        # Secure matches the session/admin cookies: the cookie alone is not a
+        # credential, but leaving the flag off lets it ride plaintext HTTP on
+        # an HTTPS deployment, which is what the flag exists to prevent.
+        resp.set_cookie(ENC_COOKIE, sid, httponly=True, samesite="lax",
+                        secure=_cookie_secure(request))
     if logical == "/api/logout":
-        resp.delete_cookie(ENC_COOKIE, samesite="lax")
+        resp.delete_cookie(ENC_COOKIE, samesite="lax",
+                           secure=_cookie_secure(request))
         enc.drop_session(sid)  # after sealing, so the reply still decrypts
     return resp
 
@@ -1008,7 +1034,8 @@ if ENC_ENABLED:
             log.exception("Encrypted login failed")
             return JSONResponse({"error": "Server error."}, status_code=500)
         resp = JSONResponse({"e": sealed})
-        resp.set_cookie(ENC_COOKIE, sid, httponly=True, samesite="lax")
+        resp.set_cookie(ENC_COOKIE, sid, httponly=True, samesite="lax",
+                        secure=_cookie_secure(request))
         return resp
 
     def _enc_seal_error(sid: str, message: str, status: int = 401) -> JSONResponse:

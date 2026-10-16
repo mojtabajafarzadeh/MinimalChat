@@ -125,7 +125,8 @@ def init_db() -> None:
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY,
                     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_seen TIMESTAMP
                 );
                 -- Admin panel sessions live here too so they survive restarts
                 -- and work across worker processes sharing this database.
@@ -142,6 +143,19 @@ def init_db() -> None:
                 conn.execute(
                     "ALTER TABLE messages ADD COLUMN reply_to_id "
                     "INTEGER NULL REFERENCES messages(id)"
+                )
+            # Sessions track last use so an idle timeout is possible, and
+            # carry an issue counter so a stolen token can be spotted. Both
+            # are nullable: existing rows get NULL last_seen and are treated
+            # as "active now", which is the safe default (they expire on the
+            # absolute lifetime as before).
+            if "last_seen" not in _columns(conn, "sessions"):
+                conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN last_seen TIMESTAMP"
+                )
+                conn.execute(
+                    "UPDATE sessions SET last_seen = created_at "
+                    "WHERE last_seen IS NULL"
                 )
             # WAL: readers don't block writers (persisted in the db file).
             # NORMAL synchronous is the documented safe pairing with WAL.

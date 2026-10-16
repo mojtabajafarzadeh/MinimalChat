@@ -34,6 +34,8 @@ priority is defaults < `.env` file < real environment variables.
 | `WS_MAX_SIZE_BYTES` | `65536` | Max WebSocket frame size (DoS guard) |
 | `MAX_SOCKETS_PER_USER` | `5` | Concurrent WebSockets one user may hold. Bounds the connection flood the message rate limit does not |
 | `MAX_SOCKETS_PER_IP` | `20` | Concurrent WebSockets one client IP may hold |
+| `TRUSTED_PROXY_CIDRS` | empty (off) | Proxies whose `X-Forwarded-For` is believed. Required behind a reverse proxy, or the per-IP caps become site-wide |
+| `SESSION_IDLE_DAYS` | `14` | Idle session lifetime; a session unused this long is dead even inside the absolute window |
 | `SESSION_LIFETIME_DAYS` | `30` | Absolute session lifetime |
 | `RATE_LOGIN_PER_MIN` / `RATE_REGISTER_PER_MIN` / `RATE_MSG_PER_MIN` | `20` / `30` / `120` | Sliding-window rate limits (per IP / per IP / per user) |
 | `ADMIN_PATH` | `/admin` | Address of the admin panel (letters, numbers, `_`, `-`) |
@@ -315,6 +317,37 @@ that: TOFU cannot detect a MITM on the *very first* connection, because there
 is nothing yet to compare against. The panel says "not verified yet" for exactly
 that state — paste the fingerprint from the server log to turn a TOFU pin into
 a verified one, after which any change to it is caught.
+
+## Running behind a reverse proxy
+
+Rate limits and the WebSocket cap are keyed on the client IP. By default that
+is the direct peer address, because `X-Forwarded-For` is client-spoofable — if
+it were believed unconditionally, anyone could put a fresh value in it and
+walk straight through every limit.
+
+The cost of that default is that behind a proxy or NAT every user shares one
+key: `MAX_SOCKETS_PER_IP=20` becomes a site-wide 20-socket ceiling, and
+`RATE_LOGIN_PER_MIN` a site-wide rate. The failure looks like "users can't open
+chat" at peak load, not like a config mistake.
+
+Set `TRUSTED_PROXY_CIDRS` to the addresses that actually terminate the
+connection:
+
+```
+TRUSTED_PROXY_CIDRS=127.0.0.1,::1          # local nginx
+TRUSTED_PROXY_CIDRS=10.0.0.0/8             # a pod or service network
+```
+
+The header is then believed **only** for requests that arrived from a listed
+address, and only its rightmost *untrusted* hop is used. Walking from the right
+is what makes this safe: a client can prepend whatever it likes to the header,
+but it cannot control what the real proxy appends. Leave the setting empty when
+the app is directly exposed.
+
+Make sure the proxy itself is configured to overwrite — not append to —
+`X-Forwarded-For` (`proxy_set_header X-Forwarded-For $remote_addr;` in nginx).
+An appending proxy passes the client's forged value through, and while the
+rightmost-hop walk still protects you, the visible client IP will be wrong.
 
 ## Admin panel
 

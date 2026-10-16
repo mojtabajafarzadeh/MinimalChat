@@ -104,6 +104,11 @@ SSL_KEYFILE = get("SSL_KEYFILE", "")
 WS_MAX_SIZE_BYTES = _get_int("WS_MAX_SIZE_BYTES", 65536, 4096, 16 * 1024 * 1024)
 # Absolute session lifetime in days (0 = expire immediately; for tests).
 SESSION_LIFETIME_DAYS = _get_int("SESSION_LIFETIME_DAYS", 30, 0, 3650)
+# Idle lifetime in days: a session unused for this long is dead even if it is
+# inside the absolute window. A stolen cookie that keeps being used looks
+# exactly like a live one, so an absolute bound alone gives the server no
+# signal to act on (A-03). 0 disables the idle check.
+SESSION_IDLE_DAYS = _get_int("SESSION_IDLE_DAYS", 14, 0, 3650)
 # Rate limits (per window, sliding). Tuned for humans, not floods.
 RATE_LOGIN_PER_MIN = _get_int("RATE_LOGIN_PER_MIN", 20, 1, 10000)
 RATE_REGISTER_PER_MIN = _get_int("RATE_REGISTER_PER_MIN", 30, 1, 10000)
@@ -118,6 +123,16 @@ RATE_ADMIN_LOGIN_PER_MIN = _get_int("RATE_ADMIN_LOGIN_PER_MIN", 10, 1, 10000)
 MAX_SOCKETS_PER_USER = _get_int("MAX_SOCKETS_PER_USER", 5, 1, 1000)
 # Per client IP, which is what actually bounds a flood spread across accounts.
 MAX_SOCKETS_PER_IP = _get_int("MAX_SOCKETS_PER_IP", 20, 1, 10000)
+
+# Reverse-proxy support. Rate limits are keyed on the direct peer address by
+# default, because X-Forwarded-For is client-spoofable. Behind a proxy that
+# makes every user share one key, so MAX_SOCKETS_PER_IP becomes a site-wide
+# socket ceiling. Name the proxy here and the header is believed -- but only
+# from a request that actually arrived from a listed address, and only its
+# rightmost untrusted hop is used.
+# Examples: "127.0.0.1,::1" for a local nginx, or the pod/service CIDR.
+TRUSTED_PROXY_CIDRS = [c.strip() for c in get("TRUSTED_PROXY_CIDRS", "").split(",")
+                      if c.strip()]
 
 # --- process model ---
 # Number of uvicorn worker processes. 1 is the supported default: SQLite and

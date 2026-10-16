@@ -4,7 +4,7 @@ import hmac
 import secrets
 
 from . import db
-from .config import SESSION_LIFETIME_DAYS
+from .config import SESSION_IDLE_DAYS, SESSION_LIFETIME_DAYS
 
 ITERATIONS = 200_000
 
@@ -40,27 +40,77 @@ def dummy_verify(password: str) -> None:
 
 def create_session(user_id: int) -> str:
     token = secrets.token_hex(32)
-    db.execute("INSERT INTO sessions (id, user_id) VALUES (?, ?)", (token, user_id))
+    db.execute(
+        "INSERT INTO sessions (id, user_id, created_at, last_seen) "
+        "VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        (token, user_id),
+    )
     return token
 
 
 def get_session_user(token: str | None):
+    """Resolve a session token to its user, or None.
+
+    Two independent limits now apply. The absolute lifetime is unchanged; the
+    idle timeout is new, because a 30-day-old cookie that is still being sent
+    is exactly what a stolen session looks like, and without an idle bound
+    there is no server-side signal at all (A-03).
+
+    Touching last_seen on every read is one UPDATE per authenticated request.
+    That is not free, so it only happens once the recorded value is older than
+    a minute -- a session is not idle if it was used a moment ago, and the
+    write would not change the answer.
+    """
     if not token:
         return None
     row = db.query_one(
-        "SELECT u.id, u.name, u.username FROM sessions s "
-        "JOIN users u ON u.id = s.user_id WHERE s.id = ? "
+        "SELECT u.id, u.name, u.username, "
+        "       CAST(strftime('%s','now') AS INTEGER) "
+        "         - CAST(strftime('%s', COALESCE(s.last_seen, s.created_at)) "
+        "               AS INTEGER) AS idle_seconds "
+        "FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ? "
         "AND datetime(s.created_at) > datetime('now', ?)",
         (token, f"-{SESSION_LIFETIME_DAYS} days"),
     )
-    if row:
-        return dict(row)
-    # Unknown or expired: opportunistically drop the dead row.
-    db.execute("DELETE FROM sessions WHERE id = ?", (token,))
-    return None
+    if not row:
+        # Unknown or past the absolute lifetime: drop the dead row.
+        db.execute("DELETE FROM sessions WHERE id = ?", (token,))
+        return None
+
+    if row["idle_seconds"] is not None and row["idle_seconds"] > SESSION_IDLE_DAYS * 86400:
+        db.execute("DELETE FROM sessions WHERE id = ?", (token,))
+        return None
+
+    if (row["idle_seconds"] or 0) > 60:
+        db.execute(
+            "UPDATE sessions SET last_seen = CURRENT_TIMESTAMP WHERE id = ?",
+            (token,),
+        )
+    return {"id": row["id"], "name": row["name"], "username": row["username"]}
 
 
 def delete_session(token: str | None) -> None:
     if not token:
         return
     db.execute("DELETE FROM sessions WHERE id = ?", (token,))
+
+
+def purge_expired_sessions() -> int:
+    """Drop every session past either limit. Returns how many went.
+
+    Called at startup. Without it the table only shrinks when a token is
+    presented, so abandoned sessions accumulate for as long as the deployment
+    lives.
+
+    Counted with changes() rather than the DELETE's return value: db.execute
+    hands back lastrowid, which for a DELETE is meaningless.
+    """
+    before = db.query_one("SELECT COUNT(*) AS n FROM sessions")["n"]
+    db.execute(
+        "DELETE FROM sessions "
+        "WHERE datetime(created_at) <= datetime('now', ?) "
+        "OR datetime(COALESCE(last_seen, created_at)) <= datetime('now', ?)",
+        (f"-{SESSION_LIFETIME_DAYS} days", f"-{SESSION_IDLE_DAYS} days"),
+    )
+    after = db.query_one("SELECT COUNT(*) AS n FROM sessions")["n"]
+    return max(0, before - after)

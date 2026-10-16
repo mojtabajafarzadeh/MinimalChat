@@ -64,6 +64,10 @@ KEYS_PATH = data_dir() / KEYS_FILE
 HANDSHAKE_TTL = 30      # seconds a pending handshake stays valid
 SESSION_TTL = 3600      # idle session lifetime
 REPLAY_WINDOW = 60      # accepted clock skew for request proofs (seconds)
+# Tolerance the other way: a timestamp from the future is never honest clock
+# skew, so this is much tighter than REPLAY_WINDOW and only absorbs a client
+# whose clock runs slightly fast.
+REPLAY_FUTURE_TOLERANCE = 5
 # Replay-dedupe capacity. Bounded so a long-lived session cannot grow the map
 # without limit; eviction is oldest-first (see verify_request).
 _SEEN_NONCES_MAX = 512
@@ -124,26 +128,29 @@ def normalize_fingerprint(text: str) -> str | None:
 
 
 def _build_key_json() -> bytes:
-    dh = ec.generate_private_key(ec.SECP256R1())
+    # Only the signing key is stored. An earlier version also generated and
+    # persisted a long-term ECDH ("dh") key, but the handshake has always used
+    # a fresh ephemeral key per session for forward secrecy, so nothing ever
+    # read it: it was a secret to protect with no protocol function, and an
+    # operator who assumed it provided forward secrecy would be wrong.
     sig = ec.generate_private_key(ec.SECP256R1())
     return json.dumps({
-        "dh": b64e(dh.private_numbers().private_value.to_bytes(32, "big")),
         "sig": b64e(sig.private_numbers().private_value.to_bytes(32, "big")),
     }).encode("utf-8")
 
 
 def _parse_key_json(raw: bytes) -> dict:
     stored = json.loads(raw.decode("utf-8"))
+    if "sig" not in stored:
+        raise EncError("Server key file is missing the signing key.")
     return {
-        "dh": ec.derive_private_key(
-            int.from_bytes(b64d(stored["dh"]), "big"), ec.SECP256R1()),
         "sig": ec.derive_private_key(
             int.from_bytes(b64d(stored["sig"]), "big"), ec.SECP256R1()),
     }
 
 
 def server_keys() -> dict:
-    """Long-term ECDH + signing keys, persisted so the fingerprint is stable.
+    """Long-term signing key, persisted so the fingerprint is stable.
 
     Creation goes through ensure_secret_file(), so all workers -- threads and
     processes -- end up with the SAME key. That matters more here than for the
@@ -482,28 +489,42 @@ def verify_request(sid: str, method: str, path: str, ts: int,
     replay marker is derived from that real nonce -- never from a constant.
     """
     session = get_session(sid)
-    if abs(int(time.time()) - int(ts)) > REPLAY_WINDOW:
+    # Two-sided window. abs() alone would also accept a timestamp up to
+    # REPLAY_WINDOW in the FUTURE, which no honest client ever sends and which
+    # merely widens the interval in which a captured request can be replayed.
+    # Clock skew only ever runs slow here, so the future side is tighter.
+    now = int(time.time())
+    skew = now - int(ts)
+    if skew > REPLAY_WINDOW or skew < -REPLAY_FUTURE_TOLERANCE:
         raise EncError("Stale request.")
     blob = b64d(mac_b64)
     if len(blob) != 12 + 16:
         raise EncError("Malformed proof.")
     nonce, tag = blob[:12], blob[12:]
     marker = f"{ts}:{b64e(nonce)}"
-    seen = session["seen_nonces"]
-    if marker in seen:
-        raise EncError("Replayed request.")
     key = _one_off_mac_key(session["mac_c2s"], nonce)
     try:
         AESGCM(key).decrypt(nonce, tag, mac_input(method, path, ts, nonce, body))
     except (InvalidSignature, InvalidTag):
         raise EncError("Request proof invalid.")
-    # OrderedDict, not set: eviction must drop the OLDEST markers. A set has
-    # no order, so `list(seen)[-256:]` kept an arbitrary 256 -- including
-    # evicting recent in-window markers, which is exactly what replay
-    # protection is supposed to prevent (C-REPLAY-TRIM).
-    seen[marker] = True
-    while len(seen) > _SEEN_NONCES_MAX:
-        seen.popitem(last=False)
+
+    # Claim the marker only after the proof verifies, and do it under the lock.
+    # Checking and inserting in two steps let two concurrent copies of the same
+    # captured request both observe "not seen", both pass GCM, and both execute
+    # (C-02). Reserving before verifying would be worse: an attacker could burn
+    # the cache with invalid proofs.
+    #
+    # OrderedDict, not set: eviction must drop the OLDEST markers. A set has no
+    # order, so `list(seen)[-256:]` kept an arbitrary 256 -- including evicting
+    # recent in-window markers, which is exactly what replay protection exists
+    # to prevent (C-REPLAY-TRIM).
+    with _state_lock:
+        seen = session["seen_nonces"]
+        if marker in seen:
+            raise EncError("Replayed request.")
+        seen[marker] = True
+        while len(seen) > _SEEN_NONCES_MAX:
+            seen.popitem(last=False)
 
 
 # --------------------------------------------------------------------------

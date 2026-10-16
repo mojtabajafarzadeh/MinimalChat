@@ -6,6 +6,7 @@
 """
 import threading
 import time
+from ipaddress import ip_address, ip_network
 from urllib.parse import urlparse
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -13,6 +14,74 @@ from starlette.responses import JSONResponse
 
 _hits: dict[str, list[float]] = {}
 _hits_lock = threading.Lock()
+_purges = 0
+
+# Populated once from config; see client_ip() for why this is opt-in.
+_trusted_proxies: list = []
+
+
+def configure_trusted_proxies(cidrs: list) -> None:
+    """Declare which peers may have their X-Forwarded-For believed.
+
+    Parsed once at startup. Anything unparseable is dropped with a warning
+    rather than silently ignored, so a typo cannot quietly turn the trusted
+    list into "no proxies" while the operator believes it is active.
+    """
+    global _trusted_proxies
+    nets = []
+    for raw in cidrs or []:
+        text = str(raw).strip()
+        if not text:
+            continue
+        try:
+            nets.append(ip_network(text, strict=False))
+        except ValueError:
+            # Startup logs the warning; here we just refuse the entry.
+            continue
+    _trusted_proxies = nets
+
+
+def trusted_proxies() -> list:
+    return list(_trusted_proxies)
+
+
+def is_trusted_proxy(address: str) -> bool:
+    if not address or not _trusted_proxies:
+        return False
+    try:
+        ip = ip_address(address)
+    except ValueError:
+        return False
+    return any(ip in net for net in _trusted_proxies)
+
+
+def client_ip(peer: str, forwarded_for: str | None) -> str:
+    """Rate-limit key for a request.
+
+    Defaults to the direct peer address, which is the only thing that cannot
+    be spoofed by the client. That is correct on a directly-exposed server and
+    WRONG behind a reverse proxy: every user then shares one key, so
+    MAX_SOCKETS_PER_IP becomes a site-wide socket ceiling and the login limit
+    becomes a site-wide login rate (I-01).
+
+    When TRUSTED_PROXY_CIDRS names the proxy, X-Forwarded-For is consulted --
+    but only from a request that actually arrived from a listed peer, and the
+    RIGHTMOST untrusted entry is taken. Walking from the right is what makes it
+    safe: a client can prepend anything to the header, but it cannot control
+    what the real proxy appends.
+    """
+    if not forwarded_for or not is_trusted_proxy(peer):
+        return peer or "unknown"
+
+    hops = [h.strip() for h in forwarded_for.split(",") if h.strip()]
+    if not hops:
+        return peer or "unknown"
+
+    for candidate in reversed(hops):
+        if not is_trusted_proxy(candidate):
+            return candidate
+    # Every hop was a listed proxy: the leftmost is the closest to the client.
+    return hops[0]
 
 
 def check_rate_limit(key: str, limit: int, window_sec: int) -> tuple[bool, int]:
@@ -26,10 +95,16 @@ def check_rate_limit(key: str, limit: int, window_sec: int) -> tuple[bool, int]:
             return False, max(retry, 1)
         recent.append(now)
         _hits[key] = recent
-        if len(_hits) > 20000:  # bound memory: purge fully-expired keys
+        # Bound memory. Purging rebuilds the dict, so under a flood of fresh
+        # keys this is O(n) per insert -- amortised by only doing it every
+        # 512 inserts instead of on every one past the cap (I-09).
+        global _purges
+        _purges += 1
+        if len(_hits) > 20000 and _purges >= 512:
             _hits.update(
                 {k: v for k, v in _hits.items() if v and v[-1] > now - window_sec}
             )
+            _purges = 0
         return True, 0
 
 
