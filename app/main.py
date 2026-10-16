@@ -16,10 +16,16 @@ per-sender order is preserved.
 import asyncio
 import json
 import logging
+import sqlite3
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request, WebSocket
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+)
 from fastapi.staticfiles import StaticFiles
 
 from . import admin, auth, crypto, db, enc
@@ -102,8 +108,21 @@ def current_user(request: Request):
     return auth.get_session_user(request.cookies.get(SESSION_COOKIE))
 
 
-def page(name: str) -> FileResponse:
-    return FileResponse(STATIC_DIR / name)
+def page(name: str, **inject: str) -> FileResponse:
+    """Serve a static page, optionally replacing `__NAME__` placeholders.
+
+    The admin panel is served at a configurable prefix and its API lives
+    under that same prefix, but a relative "./api" resolves against the
+    *document* URL -- which has no trailing slash -- so it escapes to /api
+    and hits the user endpoints. Injecting the real prefix keeps the page
+    correct for whatever ADMIN_PATH is set to.
+    """
+    if not inject:
+        return FileResponse(STATIC_DIR / name)
+    html = (STATIC_DIR / name).read_text(encoding="utf-8")
+    for key, value in inject.items():
+        html = html.replace(f"__{key}__", value)
+    return HTMLResponse(html)
 
 
 def valid_username(v: str) -> bool:
@@ -302,12 +321,21 @@ def api_register(
         return JSONResponse({"error": "Password must be at least 4 characters."}, status_code=400)
     if password != confirm:
         return JSONResponse({"error": "Passwords do not match."}, status_code=400)
-    if db.query_one("SELECT id FROM users WHERE username = ?", (username,)):
-        return JSONResponse({"error": "Username is already taken."}, status_code=400)
     try:
         user_id = db.execute(
             "INSERT INTO users (name, username, password_hash) VALUES (?, ?, ?)",
             (name, username, auth.hash_password(password)),
+        )
+    except sqlite3.IntegrityError:
+        # Username collision. The UNIQUE constraint is what actually
+        # decides this -- no pre-check, because a SELECT-then-INSERT race
+        # would both leak existence and answer inconsistently under
+        # concurrency. The message is deliberately generic: a distinct
+        # "already taken" error is a username-enumeration oracle, and
+        # username existence is not this user's business (see A-01).
+        return JSONResponse(
+            {"error": "Could not create user with those details."},
+            status_code=400,
         )
     except Exception:
         return JSONResponse({"error": "Could not create user. Try again."}, status_code=500)
@@ -397,6 +425,17 @@ def api_messages(request: Request, limit: int = 50):
     return [public_payload(r, quotes.get(r["reply_to_id"])) for r in rows]
 
 
+def _like_pattern(q: str) -> str:
+    """Escape LIKE wildcards so `q` is matched literally.
+
+    Without this, a bare `%` is a wildcard matching every username, so any
+    logged-in user could dump the whole roster (A-02). The backslash is escaped
+    first so a username containing one still matches itself.
+    """
+    escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 @app.get("/api/users")
 def api_users(request: Request, q: str = "", limit: int = 20):
     """Find users by username (to start a private conversation)."""
@@ -406,8 +445,8 @@ def api_users(request: Request, q: str = "", limit: int = 20):
     limit = max(1, min(limit, 20))
     rows = db.query_all(
         "SELECT id, name, username FROM users "
-        "WHERE username LIKE ? AND id != ? ORDER BY username LIMIT ?",
-        (f"%{q.strip()}%", user["id"], limit),
+        "WHERE username LIKE ? ESCAPE '\\' AND id != ? ORDER BY username LIMIT ?",
+        (_like_pattern(q), user["id"], limit),
     )
     return [dict(r) for r in rows]
 
@@ -486,7 +525,8 @@ if admin.enabled():
 
     @app.get(_AP)
     def admin_page():
-        return page("admin.html")
+        # The panel needs its own API prefix, which follows ADMIN_PATH.
+        return page("admin.html", ADMIN_API=_AP + "/api")
 
     @app.post(_AP + "/api/login")
     def admin_login(request: Request, password: str = Form("")):
@@ -777,11 +817,11 @@ async def ws_endpoint(ws: WebSocket):
     if not user:
         await ws.close(code=4401)
         return
-    if await manager.would_exceed(user["id"], MAX_SOCKETS_PER_USER,
-                                  MAX_SOCKETS_PER_IP, _ws_ip(ws)):
-        await manager.reject(ws, 4429)
+    if not await manager.connect(ws, user["id"], client_ip=_ws_ip(ws),
+                                 per_user=MAX_SOCKETS_PER_USER,
+                                 per_ip=MAX_SOCKETS_PER_IP):
+        # connect() already accepted and closed with 4429.
         return
-    await manager.connect(ws, user["id"], client_ip=_ws_ip(ws))
     try:
         await _ws_loop(ws, user, json.loads)
     except Exception:
@@ -999,11 +1039,11 @@ if ENC_ENABLED:
         if not user:
             await ws.close(code=4401)
             return
-        if await manager.would_exceed(user["id"], MAX_SOCKETS_PER_USER,
-                                      MAX_SOCKETS_PER_IP, _ws_ip(ws)):
-            await manager.reject(ws, 4429)
+        if not await manager.connect(ws, user["id"], sid=sid, client_ip=_ws_ip(ws),
+                                     per_user=MAX_SOCKETS_PER_USER,
+                                     per_ip=MAX_SOCKETS_PER_IP):
+            # connect() already accepted and closed with 4429.
             return
-        await manager.connect(ws, user["id"], sid=sid, client_ip=_ws_ip(ws))
         # Per-socket keys: a reloaded page opens a new socket while the old one
         # may still be registered, so counters must not be shared across sockets.
         salt, ws_c2s, ws_s2c = enc.new_socket_material(sid)

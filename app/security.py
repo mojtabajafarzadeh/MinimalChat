@@ -47,13 +47,40 @@ def origin_allowed(origin: str | None, host: str) -> bool:
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Minimal hardening headers. HSTS only over HTTPS (else it would brick
-    plain-HTTP local dev in browsers that cache it)."""
+    plain-HTTP local dev in browsers that cache it).
+
+    The CSP is the layer that would contain a future XSS: everything the app
+    loads is same-origin (static files, no third parties, no CDN), so a strict
+    policy costs nothing. `script-src 'unsafe-inline'` is required because the
+    auth pages and the admin panel each carry one inline script -- the
+    alternative is a nonce per response, which is more machinery than this
+    app warrants. What the policy still buys is the absence of any remote
+    origin: a payload that managed to execute could not POST the encrypted
+    channel keys or the TOFU pin to an attacker's server.
+    """
+
+    CSP = "; ".join((
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline'",
+        # No web fonts and no remote styles; element.style assignments (the
+        # identity banner, the DM error) are not blocked by CSP.
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+        # Same-origin fetches plus the app's own WebSocket.
+        "connect-src 'self' ws: wss:",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+    ))
 
     async def dispatch(self, request, call_next):
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = self.CSP
         if request.url.scheme == "https":
             response.headers["Strict-Transport-Security"] = (
                 "max-age=31536000; includeSubDomains"

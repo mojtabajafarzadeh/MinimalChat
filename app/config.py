@@ -145,7 +145,13 @@ ENC_HANDSHAKE_PER_MIN = _get_int("ENC_HANDSHAKE_PER_MIN", 120, 5, 100000)
 
 # --- admin panel ---
 # to the default. The panel only exists when a password is configured.
-_RESERVED_PATHS = {"/", "/login", "/register", "/chat", "/api", "/static", "/ws"}
+# Prefixes owned by another feature. The admin routes are registered before
+# the encrypted-bridge routes, so an ADMIN_PATH that collides with one would
+# shadow it: ADMIN_PATH=/enc would serve the panel at /enc and turn
+# /enc/api/login into the admin login instead of the bridge's.
+_RESERVED_PATHS = {
+    "/", "/login", "/register", "/chat", "/api", "/static", "/ws", "/enc",
+}
 
 
 def _get_admin_path() -> str:

@@ -32,8 +32,18 @@
   // Our own messages that have been sent but not yet echoed, oldest first.
   const pending = [];
 
+  // Escapes for HTML text AND quoted-attribute contexts. Quotes are included
+  // because the display name is free-form text up to 64 chars and every
+  // current attribute sink happens to take a server integer id -- that is a
+  // coincidence of today's call sites, not a property of esc(). One future
+  // `title="' + esc(x) + '"` would otherwise be a stored XSS.
   function esc(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function previewText(s) {

@@ -45,6 +45,7 @@ import os
 import secrets
 import threading
 import time
+from collections import OrderedDict
 
 from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives import hashes, serialization
@@ -63,6 +64,9 @@ KEYS_PATH = data_dir() / KEYS_FILE
 HANDSHAKE_TTL = 30      # seconds a pending handshake stays valid
 SESSION_TTL = 3600      # idle session lifetime
 REPLAY_WINDOW = 60      # accepted clock skew for request proofs (seconds)
+# Replay-dedupe capacity. Bounded so a long-lived session cannot grow the map
+# without limit; eviction is oldest-first (see verify_request).
+_SEEN_NONCES_MAX = 512
 
 
 class EncError(Exception):
@@ -273,7 +277,7 @@ def finish(sid: str, client_pub_b64: str) -> dict:
             "ctr_c2s": 0,
             "ctr_s2c": 0,
             "user": None,
-            "seen_nonces": set(),
+            "seen_nonces": OrderedDict(),
             "last_seen": now,
         }
     return {"sig": b64e(signature), "sid": sid, "ts": int(time.time())}
@@ -493,9 +497,13 @@ def verify_request(sid: str, method: str, path: str, ts: int,
         AESGCM(key).decrypt(nonce, tag, mac_input(method, path, ts, nonce, body))
     except (InvalidSignature, InvalidTag):
         raise EncError("Request proof invalid.")
-    seen.add(marker)
-    if len(seen) > 512:
-        session["seen_nonces"] = set(list(seen)[-256:])
+    # OrderedDict, not set: eviction must drop the OLDEST markers. A set has
+    # no order, so `list(seen)[-256:]` kept an arbitrary 256 -- including
+    # evicting recent in-window markers, which is exactly what replay
+    # protection is supposed to prevent (C-REPLAY-TRIM).
+    seen[marker] = True
+    while len(seen) > _SEEN_NONCES_MAX:
+        seen.popitem(last=False)
 
 
 # --------------------------------------------------------------------------

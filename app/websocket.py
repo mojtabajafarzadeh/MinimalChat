@@ -25,57 +25,57 @@ class ConnectionManager:
         self.lock = asyncio.Lock()
 
     async def connect(self, ws: WebSocket, user_id: int, sid: str | None = None,
-                      client_ip: str = "") -> None:
-        await ws.accept()
-        async with self.lock:
-            self.active.add(ws)
-            self.peers[ws] = {"user_id": user_id, "sid": sid, "sock": None,
-                              "ip": client_ip}
+                      client_ip: str = "", per_user: int = 0,
+                      per_ip: int = 0) -> bool:
+        """Register a socket, enforcing the connection budget atomically.
 
-    async def would_exceed(self, user_id: int, per_user: int, per_ip: int,
-                           client_ip: str) -> bool:
-        """Check the connection budget BEFORE accepting a socket.
+        Returns False when the budget is already spent; the socket is accepted
+        and then closed with 4429 in that case, and never enters `peers`.
 
-        A reconnecting client briefly holds its old socket while the new one
-        arrives, so the budget is checked first and only incremented once the
-        socket is actually registered.
+        Two things are deliberately in ONE critical section:
+
+        - Check and register together. Checking in a separate call first let
+          concurrent connects each observe a free slot and all register
+          afterwards, so the cap was bypassable by opening sockets in parallel
+          (I-02).
+
+        - Accept and close the rejection together. Closing *before* accepting
+          loses the code: the ASGI server turns it into a bare HTTP 403
+          handshake rejection, which the browser reports as 1006 and cannot
+          distinguish from an ordinary drop. Accepting first and then closing
+          delivers the real 4429, which the client stops on instead of retrying
+          forever against a limit it cannot get under.
+
+        The budget is counted rather than incremented, so it stays correct if a
+        caller ever reserves a slot and fails before registering.
         """
         async with self.lock:
+            over_budget = False
             if per_user > 0:
                 held = sum(1 for p in self.peers.values()
                            if p.get("user_id") == user_id)
                 if held >= per_user:
-                    return True
+                    over_budget = True
             if per_ip > 0 and client_ip:
                 held = sum(1 for p in self.peers.values()
                            if p.get("ip") == client_ip)
                 if held >= per_ip:
-                    return True
-            return False
+                    over_budget = True
+
+            await ws.accept()
+            if over_budget:
+                await ws.close(code=4429)
+                return False
+
+            self.active.add(ws)
+            self.peers[ws] = {"user_id": user_id, "sid": sid, "sock": None,
+                              "ip": client_ip}
+        return True
 
     async def disconnect(self, ws: WebSocket) -> None:
         async with self.lock:
             self.active.discard(ws)
             self.peers.pop(ws, None)
-
-    @staticmethod
-    async def reject(ws: WebSocket, code: int) -> None:
-        """Close with a specific code the client can act on.
-
-        Closing BEFORE accepting loses the code: the ASGI server turns it into
-        a bare HTTP 403 handshake rejection, which the browser reports as 1006
-        (abnormal closure). Accepting first and then closing delivers the real
-        code, so the client can tell "you are over budget -- do not retry" from
-        an ordinary drop.
-        """
-        try:
-            await ws.accept()
-        except Exception:
-            return
-        try:
-            await ws.close(code=code)
-        except Exception:
-            pass
 
     def peer(self, ws: WebSocket) -> dict:
         return self.peers.get(ws) or {}

@@ -42,15 +42,25 @@
 <script>
 (function () {
   'use strict';
-  const API = './api';
+  // Injected by the server as the panel's own API prefix (it follows
+  // ADMIN_PATH). A relative './api' would resolve against a slash-less
+  // document URL and escape to /api -- the *user* endpoints.
+  const API = '__ADMIN_API__';
   const loginView = document.getElementById('login-view');
   const panelView = document.getElementById('panel-view');
   const loginErr = document.getElementById('login-error');
   const panelErr = document.getElementById('panel-error');
   const usersBox = document.getElementById('users');
 
+  // Same escaping as app.js: quotes included, so a display name can never
+  // break out of an attribute context.
   function esc(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
   function showError(el, msg) {
     el.textContent = msg;
