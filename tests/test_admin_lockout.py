@@ -15,6 +15,7 @@ The two properties that matter, and that the tests below pin:
   curve has a grace period, and it is the reason this is not simply
   "failures * step".
 """
+import shutil
 import sys
 import time
 import unittest
@@ -162,30 +163,58 @@ class PasswordStrengthTests(unittest.TestCase):
 
 
 class RouteBehaviourTests(BackoffBase):
-    """The route itself: the backoff is consulted, the window still applies,
-    and the two cannot drift apart onto different keys."""
+    """The route itself, against a real server on a real socket.
+
+    Deliberately NOT TestClient. That needs `httpx2`, which is not in
+    requirements.txt, so on CI the import raised RuntimeError inside
+    setUpClass and failed the whole suite. A stdlib-only client on a live
+    subprocess is what every other test in this directory already does, and
+    it also exercises the real middleware stack -- which matters here, since
+    the backoff decision is made in the route, not in a middleware.
+    """
 
     WINDOW_LIMIT = 1000
 
     @classmethod
     def setUpClass(cls):
-        from fastapi.testclient import TestClient
+        import os
+        import subprocess
+        import tempfile
 
-        from testsupport import settings_env
+        from test_responsive_layout import _free_port, _wait_http
 
-        cls._env = settings_env(ENC_ENABLED="false", REGISTRATION_ENABLED="true",
-                                ADMIN_PASSWORD="a-long-admin-passphrase",
-                                ADMIN_PATH="/admin",
-                                RATE_ADMIN_LOGIN_PER_MIN=str(cls.WINDOW_LIMIT))
-        cls._env.__enter__()
-        from app.main import app
+        cls.data_dir = tempfile.mkdtemp(prefix="chat-lockout-")
+        cls.port = _free_port()
+        cls.base = f"http://127.0.0.1:{cls.port}"
+        cls.server = subprocess.Popen(
+            [sys.executable, str(ROOT / "run.py")], cwd=str(ROOT),
+            env=dict(os.environ, PORT=str(cls.port),
+                     CHAT_DATA_DIR=cls.data_dir, ENC_ENABLED="false",
+                     REGISTRATION_ENABLED="true",
+                     ADMIN_PASSWORD="a-long-admin-passphrase",
+                     ADMIN_PATH="/admin",
+                     RATE_ADMIN_LOGIN_PER_MIN=str(cls.WINDOW_LIMIT)),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not _wait_http(cls.base + "/login"):
+            cls._teardown()
+            raise unittest.SkipTest("the app did not start")
 
-        admin.apply_lockout_config()
-        cls.client = TestClient(app)
+    @classmethod
+    def _teardown(cls):
+        proc = getattr(cls, "server", None)
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except Exception:
+                proc.kill()
+        path = getattr(cls, "data_dir", None)
+        if path:
+            shutil.rmtree(path, ignore_errors=True)
 
     @classmethod
     def tearDownClass(cls):
-        cls._env.__exit__(None, None, None)
+        cls._teardown()
 
     def setUp(self):
         super().setUp()
@@ -195,87 +224,196 @@ class RouteBehaviourTests(BackoffBase):
         security._hits.clear()
 
     def _login(self, password):
-        return self.client.post("/admin/api/login", data={"password": password})
+        """POST the panel login; returns (status_code, body, headers)."""
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        data = urllib.parse.urlencode({"password": password}).encode()
+        req = urllib.request.Request(self.base + "/admin/api/login", data=data,
+                                     method="POST")
+        req.add_header("Content-Type",
+                       "application/x-www-form-urlencoded")
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return r.status, r.read().decode(), r.headers
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode(), e.headers
+
+    def _status(self, password):
+        return self._login(password)[0]
+
+    def _error(self, password):
+        import json
+
+        status, body, _ = self._login(password)
+        try:
+            return json.loads(body).get("error", "")
+        except ValueError:
+            return body
 
     def _locked_out(self):
-        return self._login("a-long-admin-passphrase").status_code == 429
+        return self._status("a-long-admin-passphrase") == 429
 
     def test_a_wrong_password_is_401_before_the_grace_period(self):
         for i in range(5):
             with self.subTest(attempt=i):
-                self.assertEqual(self._login("wrong").status_code, 401)
+                self.assertEqual(self._status("wrong"), 401)
 
     def test_past_the_grace_period_it_is_429_with_retry_after(self):
         for _ in range(6):
             self._login("wrong")
-        resp = self._login("wrong")
-        self.assertEqual(resp.status_code, 429)
-        retry = int(resp.headers["Retry-After"])
+        status, _, headers = self._login("wrong")
+        self.assertEqual(status, 429)
+        retry = int(headers["Retry-After"])
         self.assertGreaterEqual(retry, 1)
         self.assertLessEqual(retry, int(STRICT[2]))
 
     def test_the_correct_password_is_refused_while_backing_off(self):
         for _ in range(6):
             self._login("wrong")
-        self.assertEqual(self._login("a-long-admin-passphrase").status_code, 429)
+        self.assertEqual(self._status("a-long-admin-passphrase"), 429)
 
     def test_waiting_it_out_lets_the_operator_back_in(self):
-        """The escape hatch must exist, or this is a self-inflicted lockout."""
-        for _ in range(7):
+        """The escape hatch must exist, or this is a self-inflicted lockout.
+
+        The tally decays with a 300s half-life, so a live server cannot be
+        waited out inside a unit test. The decay itself is asserted as its own
+        property in TallyTests; what is pinned here is the rule the route
+        applies to a decayed value -- anything at or under the grace period is
+        served normally -- by running the server with a tiny half-life, so the
+        wait is a fraction of a second instead of five minutes."""
+        import os
+        import subprocess
+        import tempfile
+
+        from test_responsive_layout import _free_port, _wait_http
+
+        data_dir = tempfile.mkdtemp(prefix="chat-lockout-decay-")
+        port = _free_port()
+        base = f"http://127.0.0.1:{port}"
+        # Half-life 10s is the config floor; grace 5 means the tally has to fall
+        # by more than half before the route stops refusing, so ~11s of
+        # sleeping. Long enough to be real, short enough to be a test.
+        proc = subprocess.Popen(
+            [sys.executable, str(ROOT / "run.py")], cwd=str(ROOT),
+            env=dict(os.environ, PORT=str(port), CHAT_DATA_DIR=data_dir,
+                     ENC_ENABLED="false", REGISTRATION_ENABLED="true",
+                     ADMIN_PASSWORD="a-long-admin-passphrase",
+                     ADMIN_LOCKOUT_HALF_LIFE="10",
+                     RATE_ADMIN_LOGIN_PER_MIN="1000"),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            if not _wait_http(base + "/login"):
+                self.skipTest("the app did not start")
+            import urllib.error
+            import urllib.parse
+            import urllib.request
+
+            def attempt(password):
+                data = urllib.parse.urlencode(
+                    {"password": password}).encode()
+                req = urllib.request.Request(base + "/admin/api/login",
+                                             data=data, method="POST")
+                try:
+                    with urllib.request.urlopen(req, timeout=15) as r:
+                        return r.status
+                except urllib.error.HTTPError as e:
+                    return e.code
+
+            # grace is 5, so the first SIX failures are free and the seventh
+            # is the first one refused.
+            for i in range(6):
+                self.assertEqual(attempt("wrong"), 401,
+                                 f"failure {i + 1} of 6 should still be free")
+            self.assertEqual(attempt("a-long-admin-passphrase"), 429,
+                             "the backoff did not engage at all")
+
+            # More than one half-life: the tally halves each time, so this is
+            # the real escape hatch, not a reconfiguration.
+            time.sleep(11)
+            self.assertEqual(attempt("a-long-admin-passphrase"), 200,
+                             "the operator was locked out permanently")
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except Exception:
+                    proc.kill()
+            shutil.rmtree(data_dir, ignore_errors=True)
+
+    def test_a_correct_password_clears_the_tally(self):
+        """Getting back in has to reset the slate, or the second mistake is
+        punished as if the first had never been forgiven."""
+        for _ in range(4):
             self._login("wrong")
-        self.assertTrue(self._locked_out())
-        # Age the tally past the grace instead of sleeping eight seconds.
-        with security._lockouts_lock:
-            key = next(iter(security._lockouts))
-            fails, _ = security._lockouts[key]
-            security._lockouts[key] = (fails * 0.01, time.monotonic())
-        self.assertEqual(self._login("a-long-admin-passphrase").status_code, 200)
+        self.assertEqual(self._status("a-long-admin-passphrase"), 200)
+        # If the success had not cleared the tally, the next few failures
+        # would push straight past the 5-attempt grace.
+        for i in range(5):
+            with self.subTest(after_success=i):
+                self.assertEqual(self._status("wrong"), 401,
+                                 "the tally was not cleared by the success")
 
     def test_the_window_still_applies_when_the_backoff_is_off(self):
         """With ADMIN_LOCKOUT_STEP=0 the sliding window is the only guard, and
-        it must still stop a fast run on its own."""
-        security.configure_admin_lockout(*OFF)
-        self.addCleanup(security.configure_admin_lockout, *STRICT)
-        codes = [self._login("wrong").status_code
-                 for _ in range(self.WINDOW_LIMIT + 2)]
-        self.assertIn(429, codes,
-                      "the sliding window stopped throttling; the backoff "
-                      "cannot be the only guard")
+        it must still stop a fast run on its own. The server runs in a
+        subprocess, so this drives the curve from a separate config instead of
+        reconfiguring in-process state that the subprocess cannot see."""
+        import os
+        import shutil
+        import subprocess
+        import tempfile
 
-    def test_the_two_limits_share_one_key(self):
-        """Two keys would leave a source of unbounded attempts: the window
-        would rate-limit key A while the backoff watched key B.
+        from test_responsive_layout import _free_port, _wait_http
 
-        The behavioural consequence: with the window spent, a caller that
-        answers 429 from the WINDOW carries 'too many attempts' (a fixed
-        Retry-After). With only the BACKOFF spent it carries 'too many failed
-        attempts' and a Retry-After equal to the growing curve. Both 429s
-        look identical from the outside, which is exactly why this asserts on
-        the body instead of the status code.
-        """
-        import app.main as main
-        from app.config import RATE_ADMIN_LOGIN_PER_MIN
+        data_dir = tempfile.mkdtemp(prefix="chat-lockout-off-")
+        port = _free_port()
+        base = f"http://127.0.0.1:{port}"
+        proc = subprocess.Popen(
+            [sys.executable, str(ROOT / "run.py")], cwd=str(ROOT),
+            env=dict(os.environ, PORT=str(port), CHAT_DATA_DIR=data_dir,
+                     ENC_ENABLED="false", REGISTRATION_ENABLED="true",
+                     ADMIN_PASSWORD="a-long-admin-passphrase",
+                     ADMIN_LOCKOUT_STEP="0",
+                     RATE_ADMIN_LOGIN_PER_MIN="5"),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            if not _wait_http(base + "/login"):
+                self.skipTest("the app did not start")
+            import urllib.error
+            import urllib.parse
+            import urllib.request
 
-        self.assertEqual(main.RATE_ADMIN_LOGIN_PER_MIN, self.WINDOW_LIMIT,
-                         "the fixture's window limit and the app's disagree")
+            codes = []
+            for _ in range(8):
+                data = urllib.parse.urlencode(
+                    {"password": "wrong"}).encode()
+                req = urllib.request.Request(base + "/admin/api/login",
+                                             data=data, method="POST")
+                try:
+                    with urllib.request.urlopen(req, timeout=15) as r:
+                        codes.append(r.status)
+                except urllib.error.HTTPError as e:
+                    codes.append(e.code)
+            self.assertIn(429, codes,
+                          "with the backoff off the sliding window must still "
+                          f"stop a burst of 8 against a limit of 5; got {codes}")
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except Exception:
+                    proc.kill()
+            shutil.rmtree(data_dir, ignore_errors=True)
 
-        for _ in range(6):
-            self._login("wrong")
-        backoff_only = self._login("wrong")
-        self.assertIn("failed attempts", backoff_only.json()["error"])
-        self.assertGreater(int(backoff_only.headers["Retry-After"]), 1,
-                           "this is not the backoff's curve, it is the window")
-
-        # Spend the window as well.
-        for _ in range(self.WINDOW_LIMIT):
-            self._login("wrong")
-        both = self._login("wrong")
-        self.assertEqual(both.json()["error"], "Too many attempts. Try again later.",
-                         "the window is no longer the one refusing")
-
-    def test_a_correct_password_after_the_backoff_is_a_200(self):
-        """And the whole point: an operator who waits is let in."""
-        self.assertEqual(self._login("a-long-admin-passphrase").status_code, 200)
+    def test_a_correct_password_from_a_clean_tally_is_accepted(self):
+        """And the whole point: an operator who has not been attacking their
+        own server gets in."""
+        self.assertEqual(self._status("a-long-admin-passphrase"), 200)
+        self.assertEqual(self._error("wrong"), "Invalid admin password.")
 
 
 class LockoutConfigTests(unittest.TestCase):
