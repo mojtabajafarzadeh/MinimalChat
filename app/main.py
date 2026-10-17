@@ -14,19 +14,20 @@ connections. Each connection still awaits its own messages sequentially, so
 per-sender order is preserved.
 """
 import asyncio
-import base64
 import json
 import logging
 import re
 import sqlite3
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request, WebSocket
+from fastapi import FastAPI, Form, HTTPException, Request, WebSocket
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
     JSONResponse,
+    PlainTextResponse,
     RedirectResponse,
+    Response,
 )
 from fastapi.staticfiles import StaticFiles
 
@@ -129,7 +130,8 @@ def current_user(request: Request):
 
 
 def page(name: str, asset_inject: dict | None = None,
-         **js_inject: str) -> FileResponse:
+         script_prefix: str = "/static",
+         **js_inject: str) -> HTMLResponse:
     """Serve a static page, rewriting placeholders in it AND its scripts.
 
     Two different placeholders, because the two live in different files:
@@ -145,6 +147,12 @@ def page(name: str, asset_inject: dict | None = None,
     and hits the user endpoints. Injecting the real prefix keeps the panel
     correct for whatever ADMIN_PATH is set to.
 
+    A script carrying a placeholder is served from the rewritten-asset route
+    rather than inlined as a data: URL. `script-src 'self'` does not permit
+    data:, so a data: URL is silently blocked: the page loads, the panel's
+    logic never runs, and the APIs still answer direct calls -- a panel that
+    looks dead in the browser with a working backend.
+
     The rewrite must NOT be written back to the file. It used to be, which
     meant the FIRST panel visit permanently burned __ADMIN_API__ into the
     checked-in admin.js: a second server on the same tree with a different
@@ -156,44 +164,39 @@ def page(name: str, asset_inject: dict | None = None,
     for key, value in js_inject.items():
         token = f"__{key}__"
         html = html.replace(token, value)
-        for script in _script_srcs(html):
-            if not script.is_file():
+        for src in _script_srcs(html):
+            if not (STATIC_DIR / src).is_file():
                 continue
             try:
-                text = script.read_text(encoding="utf-8")
+                text = (STATIC_DIR / src).read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
             if token in text:
                 html = html.replace(
-                    "/static/" + script.relative_to(STATIC_DIR).as_posix(),
-                    _script_with_token(script, token, value))
+                    f'src="/static/{src}"',
+                    f'src="{script_prefix.rstrip("/")}/{src}"')
     for key, value in (asset_inject or {}).items():
         html = html.replace(f"__{key}__", value)
     return HTMLResponse(html)
 
 
 def _script_srcs(html: str) -> list:
-    """The scripts a page references, as Paths under STATIC_DIR.
+    """The /static/*.js filenames a page references, in document order."""
+    return re.findall(r'src="/static/([^"]+\.js)"', html)
 
-    src values look like "/static/app.js", but STATIC_DIR is the mount point
-    ITSELF, so joining that with the absolute-looking src would escape the
-    directory entirely (Path.__truediv__ with an absolute right side
-    discards the left). lstrip the prefix before joining.
+
+def _asset_token(name: str) -> str | None:
+    """The injection token a script carries (__ADMIN_API__), or None.
+
+    Encoded rather than passed in the URL: ADMIN_PATH is already sanitised to
+    [A-Za-z0-9_-] by config, but this keeps the route from ever becoming a
+    place where a path is read back out of a query string.
     """
-    return [STATIC_DIR / src.lstrip("/").removeprefix("static/")
-            for src in re.findall(r'src="/static/([^"]+\.js)"', html)]
-
-
-def _script_with_token(script: Path, token: str, value: str) -> str:
-    """A data: URL carrying `script` with `token` replaced by `value`.
-
-    Used only for the few scripts that carry a per-request placeholder. The
-    URL is ~1.3x the file size, which a browser decompresses; the alternative
-    was rewriting the file on disk, and that is not a trade worth making.
-    """
-    text = script.read_text(encoding="utf-8").replace(token, value)
-    return "data:text/javascript;base64," + base64.b64encode(
-        text.encode("utf-8")).decode("ascii")
+    try:
+        text = (STATIC_DIR / name).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    return "__ADMIN_API__" if "__ADMIN_API__" in text else None
 
 
 def valid_username(v: str) -> bool:
@@ -603,8 +606,37 @@ if admin.enabled():
 
     @app.get(_AP)
     def admin_page():
-        # The panel needs its own API prefix, which follows ADMIN_PATH.
-        return page("admin.html", ADMIN_API=_AP + "/api")
+        # The panel needs its own API prefix, which follows ADMIN_PATH, and it
+        # needs admin.js served from under that same prefix so the rewritten
+        # copy stays same-origin ('self' permits it; a data: URL would not).
+        return page("admin.html", script_prefix=_AP + "/assets",
+                    ADMIN_API=_AP + "/api")
+
+    @app.get(_AP + "/assets/{name}")
+    def admin_asset(name: str):
+        """A static script with its injection token replaced.
+
+        Same-origin on purpose: `script-src 'self'` allows this route and
+        nothing else, which is what lets the strict policy stay strict. The
+        alternative -- inlining the logic as a data: URL -- is blocked by that
+        same policy, so the panel's login form and user management would
+        silently never run in the browser.
+
+        Reads from the same directory as /static and serves nothing else: a
+        name is rejected unless it is a plain .js filename that exists there.
+        Without that, "{name}" would walk out of the directory.
+        """
+        if "/" in name or "\\" in name or not name.endswith(".js"):
+            raise HTTPException(status_code=404)
+        if not (STATIC_DIR / name).is_file() or _asset_token(name) is None:
+            # Only scripts that actually carry a token are served here, so
+            # this route cannot be used as a second way in to /static.
+            raise HTTPException(status_code=404)
+        text = (STATIC_DIR / name).read_text(encoding="utf-8")
+        return Response(
+            content=text.replace("__ADMIN_API__", _AP + "/api"),
+            media_type="application/javascript; charset=utf-8",
+        )
 
     @app.post(_AP + "/api/login")
     def admin_login(request: Request, password: str = Form("")):

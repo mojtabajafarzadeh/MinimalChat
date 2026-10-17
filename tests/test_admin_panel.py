@@ -146,17 +146,14 @@ class AdminPanelTests(unittest.TestCase):
     def _panel_logic(page_html, fetch):
         """The admin panel's LOGIC, exactly as the browser would load it.
 
-        The prefix lives in the logic, not the markup, so this has to follow
-        what the page actually references:
+        Follows what the page actually references rather than assuming a
+        form: a plain path -> fetch it, a data: URL -> decode it. Returns
+        None when the page references no logic at all.
 
-        - a plain /static/admin.js src -> fetch it;
-        - a data: src -> decode it. page() uses that form to hand one script a
-          per-request value without rewriting the file on disk, and the
-          rewrite must never reach the browser through /static/ in that case.
-
-        Returns None when the page references no logic at all, and raises when
-        it references some that does not define the API prefix -- that is a
-        dead panel, which is the failure this whole test exists for.
+        (The data: case is dead code now -- the panel's logic is served
+        same-origin so `script-src 'self'` permits it -- but it is left here
+        so a regression that reintroduces inlining shows up as a readable
+        failure here rather than as a silently blocked script.)
         """
         import base64
         import re
@@ -165,17 +162,11 @@ class AdminPanelTests(unittest.TestCase):
             text = base64.b64decode(url.partition(",")[2]).decode("utf-8", "replace")
             if "var API" in text:
                 return text
-
-        for src in re.findall(r'src="(/static/[^"]+\.js)"', page_html):
+        for src in re.findall(r'src="([^"]+\.js)"', page_html):
             status, text = fetch(src)
-            if status != 200:
-                continue
-            if "var API" in text:
+            if status == 200 and "var API" in text:
                 return text
-
-        raise AssertionError(
-            "the panel page references no script that defines its API prefix; "
-            "it would call nothing and the panel is dead")
+        return None
 
     def test_the_panel_works_under_a_custom_admin_path(self):
         """ADMIN_PATH is configurable, so a fix hardcoding /admin/api would
@@ -190,6 +181,10 @@ class AdminPanelTests(unittest.TestCase):
         self.assertEqual(status, 200)
 
         logic = self._panel_logic(body, self._get)
+        self.assertIsNotNone(
+            logic,
+            "the panel page references no script that defines its API prefix; "
+            "it would call nothing and the panel is dead")
         self.assertIn("/my-control-panel/api", logic,
                       "the panel's logic does not point at its own prefix")
         self.assertNotIn("__ADMIN_API__", logic,
@@ -201,6 +196,53 @@ class AdminPanelTests(unittest.TestCase):
             self.admin_path + "/api/login",
             {"password": "panel-test-password"}, jar)
         self.assertEqual(status, 200, f"custom-path login failed: {body}")
+
+    def test_the_panel_script_is_served_same_origin_not_inlined(self):
+        """A `data:` script is blocked by `script-src 'self'`, so the panel
+        loads with dead logic. Confirmed in Chrome: with the data: form the
+        browser logged `script-src-elem :: data` and admin.js never executed.
+
+        So the rewritten copy has to come from a URL the policy permits."""
+        self._boot(enc_enabled=False, admin_path="/admin")
+        status, body = self._get("/admin")
+        self.assertEqual(status, 200)
+        self.assertNotIn('src="data:', body,
+                         "the panel's logic is inlined as a data: URL, which "
+                         "script-src 'self' blocks in every browser")
+        self.assertIn('src="/admin/assets/admin.js"', body,
+                      "the panel's logic is not served from the same-origin "
+                      "asset route")
+
+    def test_the_asset_route_serves_only_token_carrying_scripts(self):
+        """It reads from the static directory, so it must not be a second way
+        into every file there -- only the scripts that carry an injection
+        token are served."""
+        self._boot(enc_enabled=False, admin_path="/admin")
+        status, body = self._get("/admin/assets/admin.js")
+        self.assertEqual(status, 200)
+        self.assertIn("var API", body)
+        self.assertNotIn("__ADMIN_API__", body)
+
+        for path in ("/admin/assets/app.js",      # no token
+                     "/admin/assets/theme.js",    # no token
+                     "/admin/assets/style.css",   # not a .js
+                     "/admin/assets/../db.py",    # traversal
+                     "/admin/assets/..%2fchat.db"):  # encoded traversal
+            with self.subTest(path=path):
+                status, _ = self._get(path)
+                self.assertEqual(status, 404,
+                                 f"{path} is served by the asset route")
+
+    def test_the_asset_route_follows_admin_path(self):
+        """The prefix is configurable, so the rewrite has to follow it --
+        otherwise the panel at a custom prefix loads a 404 for its own logic."""
+        self._boot(enc_enabled=False, admin_path="/my-control-panel")
+        status, body = self._get("/my-control-panel")
+        self.assertEqual(status, 200)
+        self.assertIn('src="/my-control-panel/assets/admin.js"', body)
+        status, script = self._get("/my-control-panel/assets/admin.js")
+        self.assertEqual(status, 200)
+        self.assertIn("/my-control-panel/api", script)
 
     def test_the_panel_works_with_the_encrypted_transport_on(self):
         """The default configuration. This is the case that reported 403."""

@@ -14,6 +14,7 @@ So the guard scripts moved to external .js files and connect-src is built per
 response from the Host the client actually reached.
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -228,9 +229,6 @@ class NoInlineScriptTests(unittest.TestCase):
     def test_the_admin_panel_loads_its_logic_too(self):
         """The panel needs a configured password to exist at all, so it is
         served by its own instance with one set."""
-        import base64
-        import re
-
         try:
             with urllib.request.urlopen(self.admin_base + "/admin",
                                         timeout=15) as r:
@@ -245,26 +243,45 @@ class NoInlineScriptTests(unittest.TestCase):
             next((p.strip() for p in policy.split(";")
                   if p.strip().startswith("script-src")), ""),
             "script-src 'self'")
-
-        # The API prefix is injected into the panel's LOGIC, not the markup --
-        # so wherever the logic is, it must carry the prefix. It normally
-        # comes from /static/admin.js; page() may instead hand it over as a
-        # data: URL carrying the rewritten file.
-        with urllib.request.urlopen(self.admin_base + "/static/admin.js",
-                                    timeout=15) as r:
-            asset = r.read().decode("utf-8")
-        if re.search(r'src="(/static/admin\.js)"', body):
-            self.assertIn("'/admin/api'", asset,
-                          "ADMIN_PATH was not injected into admin.js; the "
-                          "panel would call the user endpoints")
-        else:
-            inlined = "".join(
-                base64.b64decode(url.partition(",")[2]).decode("utf-8", "replace")
-                for url in re.findall(r'src="(data:[^"]+)"', body))
-            self.assertIn("'/admin/api'", inlined,
-                          "the panel logic was served inline but without the "
-                          "API prefix")
         self.assertNotIn("__ADMIN_API__", body)
+
+    def test_the_admin_pages_script_is_permitted_by_the_policy(self):
+        """The regression this exists for.
+
+        `page()` used to hand the panel's logic over as a `data:` URL, so the
+        page was `script-src 'self'` and the script was `data:`. Chrome blocks
+        that -- verified, not assumed: with the data: form the browser logged
+        `script-src-elem :: data` and admin.js never ran, so the panel's login
+        form and user management were dead while its APIs still answered
+        direct HTTP calls.
+
+        So the delivery vehicle is not a detail: it has to be a source the
+        policy actually permits. That is the invariant, and it is checked
+        structurally against the live policy rather than against a fixed
+        expectation of which vehicle is used.
+        """
+        for path in ("/admin", "/login", "/register", "/chat"):
+            with self.subTest(path=path):
+                policy = self._policy(path)
+                directive = next((p.strip() for p in policy.split(";")
+                                  if p.strip().startswith("script-src")), "")
+                permitted = directive.split()[1:] or ["'self'"]
+                for src in re.findall(r'<script src="([^"]+)"', self._get(path)[0]):
+                    scheme = src.split(":", 1)[0] if ":" in src.split("/", 1)[0] \
+                        else None
+                    if scheme is None:
+                        continue          # same-origin path: 'self' covers it
+                    if scheme == "data":
+                        self.assertIn(
+                            "data:", permitted,
+                            f"{path} serves a data: script but script-src is "
+                            f"{directive!r}; every browser blocks that, so the "
+                            "page loads and its logic never runs")
+                    else:
+                        self.assertIn(
+                            scheme, permitted,
+                            f"{path} loads a {scheme}: script that "
+                            f"script-src {directive!r} does not permit")
 
 
 class StaticJsIsSafeTests(unittest.TestCase):
