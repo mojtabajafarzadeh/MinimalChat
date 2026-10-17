@@ -48,6 +48,13 @@ class ConnectionManager:
 
         The budget is counted rather than incremented, so it stays correct if a
         caller ever reserves a slot and fails before registering.
+
+        The cost is that accept() runs while the lock is held, so a burst of
+        connects is serialised on that one I/O call. At this scale it is noise;
+        if the app ever grew to thousands of simultaneous connects it would be
+        the first thing to move, and the way to move it is to accept outside
+        the lock and register under it -- which reintroduces the window above,
+        so it would need a reservation counter instead of a recount.
         """
         async with self.lock:
             over_budget = False
@@ -62,9 +69,19 @@ class ConnectionManager:
                 if held >= per_ip:
                     over_budget = True
 
-            await ws.accept()
+            # accept() fails when the client disappears mid-handshake. That
+            # is routine, not an error worth a traceback, and the socket was
+            # never registered so there is nothing to clean up -- the old
+            # reject() swallowed it for the same reason.
+            try:
+                await ws.accept()
+            except Exception:
+                return False
             if over_budget:
-                await ws.close(code=4429)
+                try:
+                    await ws.close(code=4429)
+                except Exception:
+                    pass
                 return False
 
             self.active.add(ws)

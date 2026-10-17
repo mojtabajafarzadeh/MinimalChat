@@ -144,11 +144,8 @@ def init_db() -> None:
                     "ALTER TABLE messages ADD COLUMN reply_to_id "
                     "INTEGER NULL REFERENCES messages(id)"
                 )
-            # Sessions track last use so an idle timeout is possible, and
-            # carry an issue counter so a stolen token can be spotted. Both
-            # are nullable: existing rows get NULL last_seen and are treated
-            # as "active now", which is the safe default (they expire on the
-            # absolute lifetime as before).
+            # Sessions track last use so an idle timeout is possible. Nullable,
+            # so existing rows are backfilled from created_at and stay valid.
             if "last_seen" not in _columns(conn, "sessions"):
                 conn.execute(
                     "ALTER TABLE sessions ADD COLUMN last_seen TIMESTAMP"
@@ -157,6 +154,17 @@ def init_db() -> None:
                     "UPDATE sessions SET last_seen = created_at "
                     "WHERE last_seen IS NULL"
                 )
+            # Commit the migrations BEFORE the PRAGMAs below.
+            #
+            # In Python's sqlite3 the legacy transaction control opens an
+            # implicit write transaction on the UPDATE above and never closes
+            # it, so `PRAGMA synchronous` fails with "Safety level may not be
+            # changed inside a transaction" -- and on a database that is
+            # already in WAL mode (i.e. every existing deployment) it also
+            # fails to re-assert journal_mode. The server then dies at startup
+            # on upgrade. This also covers the older reply_to_id and legacy
+            # messages migrations, which have the same shape.
+            conn.commit()
             # WAL: readers don't block writers (persisted in the db file).
             # NORMAL synchronous is the documented safe pairing with WAL.
             conn.execute("PRAGMA journal_mode=WAL")
