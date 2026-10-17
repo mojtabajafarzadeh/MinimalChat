@@ -181,6 +181,55 @@ def preflight(workers: int, allow_split_rooms: bool) -> None:
     print("!" * 72 + "\n", flush=True)
 
 
+def warn_insecure_startup(scheme: str) -> None:
+    """Report configurations that are weak but not fatal, before serving.
+
+    Deliberately a warning, not a refusal. Every one of these is a legitimate
+    choice for a laptop on localhost; the point is that an operator who made it
+    by accident finds out here rather than by reading the source afterwards.
+
+    Two of them mean the operator has accepted a real downgrade:
+
+    - plain HTTP with the encrypted channel off is exactly the mode the
+      channel exists to avoid -- credentials and messages in cleartext on every
+      hop, with no application-layer protection left;
+    - no admin password at all leaves the panel off, which is right, but is
+      also why nothing is watching the user list.
+    """
+    from app.config import ENC_ENABLED, HOST
+    from app import admin
+
+    notes = []
+    if scheme == "http" and not ENC_ENABLED:
+        notes.append(
+            "ENC_ENABLED=false with plain HTTP: passwords, session tokens and "
+            "messages travel in CLEARTEXT with no transport protection at "
+            "all. This is only safe on a loopback interface. Set "
+            "ENC_ENABLED=true, or configure SSL_CERTFILE/SSL_KEYFILE, or keep "
+            "this on 127.0.0.1 only.")
+    if scheme == "http" and HOST not in ("127.0.0.1", "localhost", "::1"):
+        notes.append(
+            f"plain HTTP on {HOST}: this is reachable from the network with no "
+            "encryption. Use TLS (SSL_CERTFILE/SSL_KEYFILE) before exposing it.")
+    if admin.enabled():
+        weak = admin.password_strength()
+        if weak:
+            notes.append(
+                f"{weak}. One credential guards every user and message in "
+                "this database. Generate a good one with: python3 -c "
+                "\"import secrets; print(secrets.token_urlsafe(24))\"")
+    else:
+        notes.append(
+            "no ADMIN_PASSWORD/ADMIN_PASSWORD_HASH: the admin panel is "
+            "disabled (its routes 404). Set one to be able to manage users.")
+
+    for note in notes:
+        log.warning("insecure startup: %s", note)
+        print("\n" + "!" * 72, flush=True)
+        print("WARNING: " + note, flush=True)
+        print("!" * 72, flush=True)
+
+
 def main() -> None:
     ensure_deps()
     import uvicorn
@@ -196,13 +245,17 @@ def main() -> None:
         WORKERS,
     )
     from app.db import init_db
+    from app import admin
 
     preflight(WORKERS, ALLOW_SPLIT_ROOMS)
     init_db()
+    # Before the warning: the strength check reads the configured password.
+    admin.apply_lockout_config()
     log_server_identity()
 
     use_tls = bool(SSL_CERTFILE and SSL_KEYFILE)
     scheme = "https" if use_tls else "http"
+    warn_insecure_startup(scheme)
     mode = f"{WORKERS} worker(s)" if WORKERS > 1 else "single process"
     print(f"Chat app running at {scheme}://{HOST}:{PORT} [{mode}]", flush=True)
     uvicorn.run(
