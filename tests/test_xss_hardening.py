@@ -66,7 +66,10 @@ class EscaperTests(unittest.TestCase):
     def setUp(self):
         if not shutil.which("node"):
             self.skipTest("node is needed to run the real escaper")
-        self.sources = ["app/static/app.js", "app/static/admin.html"]
+        # admin.js, not admin.html: the panel's esc() moved into an external
+        # file so the CSP could drop 'unsafe-inline'. The test follows the
+        # code, so it has to follow that move too.
+        self.sources = ["app/static/app.js", "app/static/admin.js"]
 
     def _both(self, inputs):
         for rel in self.sources:
@@ -170,9 +173,21 @@ class ContentSecurityPolicyTests(unittest.TestCase):
         self.assertNotIn("https://", csp)
 
     def test_the_policy_still_allows_the_apps_own_websocket(self):
+        """connect-src names this origin in ws:// form -- and only this one.
+
+        `'self'` alone would NOT permit the WebSocket, so the origin has to be
+        spelled out. The point of the per-response Host is that it names
+        exactly one: `ws: wss:` permitted every host on earth, which is the
+        channel an injected script exfiltrates through."""
         csp = self._headers("/chat").get("Content-Security-Policy", "")
-        self.assertIn("connect-src 'self' ws: wss:", csp,
+        self.assertIn(f"ws://127.0.0.1:{self.port}", csp,
                       "the app's own WebSocket would be blocked by this CSP")
+        directive = next(p.strip() for p in csp.split(";")
+                         if p.strip().startswith("connect-src"))
+        self.assertEqual(directive,
+                         f"connect-src 'self' ws://127.0.0.1:{self.port}")
+        # ... and nothing else is reachable.
+        self.assertNotIn("*", csp.replace("'unsafe-inline'", ""))
 
 
 class NoRemoteAssetsTests(unittest.TestCase):

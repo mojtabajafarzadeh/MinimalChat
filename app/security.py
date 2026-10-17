@@ -108,6 +108,121 @@ def check_rate_limit(key: str, limit: int, window_sec: int) -> tuple[bool, int]:
         return True, 0
 
 
+# --- admin brute-force backoff (A-04) ---
+#
+# The sliding window above bounds the *rate* of attempts; it does not bound
+# the *total*. An attacker who keeps guessing inside a generous window still
+# gets an unbounded number of tries, which is what makes an online dictionary
+# attack on a single admin credential practical. So below the window, failures
+# accrue their own tally and the delay grows exponentially:
+#
+#     delay = step * 2 ** max(0, failures - grace)     capped at max
+#
+# The grace period is what keeps this from being an own goal: the first few
+# mistakes are free, because an operator who fat-fingers their own password
+# twice should not be shown a 429. From there the curve is steep enough that a
+# scripted run is hopeless -- with the defaults, the 11th failure in a row
+# costs two minutes per guess, and a dictionary of any size becomes academic.
+#
+# The tally decays with a half-life, so a real operator who fumbles is never
+# locked out: the delay fades while they read the README.
+#
+# Per client IP, which is the same scope as the rate limit and the only one
+# available without shared state. A botnet gets one tally per address; that
+# limit is inherent to the single-process model and is why the password
+# strength warning (see app.admin.password_strength) exists alongside this.
+#
+# The thresholds are bound to a few names at import time, on purpose: the
+# module must never reach back into app.config (config imports nothing from
+# the package, and keeping it that way is what lets run.py read settings
+# before the app is importable). `configure_admin_lockout` sets them, and it
+# is called once at startup by app.admin.apply_lockout_config.
+_lockouts: dict[str, tuple[float, float]] = {}
+_lockouts_lock = threading.Lock()
+_lockout_purges = 0
+_admin_delay_step = 0.0
+_admin_delay_grace = 0.0
+_admin_max_delay = 0.0
+_admin_half_life = 300.0
+
+
+def configure_admin_lockout(step: float, grace: float, maximum: float,
+                            half_life: float) -> None:
+    """Set the backoff curve. Called once at startup, and by tests."""
+    global _admin_delay_step, _admin_delay_grace, _admin_max_delay
+    global _admin_half_life
+    _admin_delay_step = max(0.0, float(step))
+    _admin_delay_grace = max(0.0, float(grace))
+    _admin_max_delay = max(0.0, float(maximum))
+    _admin_half_life = max(1.0, float(half_life))
+
+
+def _decayed(fails: float, last: float, now: float, half_life: float) -> float:
+    """A failure tally aged by one half-life per `half_life` seconds.
+
+    elapsed is clamped at zero: a negative one would make 0.5 ** negative
+    LARGER than 1, i.e. a backwards clock would inflate the tally rather than
+    fade it, and time.monotonic() going backwards is not worth defending
+    against -- but free failures that decay into a real delay is not worth
+    allowing either.
+    """
+    elapsed = max(0.0, now - last)
+    return fails * (0.5 ** (elapsed / half_life))
+
+
+def admin_failures(key: str, now: float | None = None) -> float:
+    """Current decayed failure count for `key`. 0 when there are none."""
+    now = time.monotonic() if now is None else now
+    with _lockouts_lock:
+        fails, last = _lockouts.get(key, (0.0, now))
+    return _decayed(fails, last, now, _admin_half_life)
+
+
+def admin_delay(fails: float) -> float:
+    """Seconds an admin login attempt should wait, for a decayed tally.
+
+    0 means "try now". Step 0 disables the whole curve, leaving only the
+    sliding window above.
+    """
+    excess = max(0.0, fails - _admin_delay_grace)
+    if excess <= 0:
+        return 0.0
+    # 2**excess, capped: a long-running attack must not reach an overflow or
+    # an absurd Retry-After, so the exponent is clamped before it is used.
+    return min(_admin_delay_step * (2.0 ** min(excess, 30.0)), _admin_max_delay)
+
+
+def register_admin_failure(key: str, now: float | None = None) -> float:
+    """Count one failed admin login; return the resulting delay in seconds."""
+    global _lockout_purges
+    now = time.monotonic() if now is None else now
+    with _lockouts_lock:
+        fails, last = _lockouts.get(key, (0.0, now))
+        tally = _decayed(fails, last, now, _admin_half_life) + 1.0
+        _lockouts[key] = (tally, now)
+        # Bound memory; same amortised shape as check_rate_limit.
+        _lockout_purges += 1
+        if len(_lockouts) > 1000 and _lockout_purges >= 128:
+            _lockouts.update(
+                {k: v for k, v in _lockouts.items()
+                 if _decayed(v[0], v[1], now, _admin_half_life) >= 1.0}
+            )
+            _lockout_purges = 0
+        return admin_delay(tally)
+
+
+def clear_admin_failures(key: str) -> None:
+    """A correct password wipes the tally -- the operator is back in."""
+    with _lockouts_lock:
+        _lockouts.pop(key, None)
+
+
+def clear_admin_state() -> None:
+    """Forget every tally. Tests only."""
+    with _lockouts_lock:
+        _lockouts.clear()
+
+
 def origin_allowed(origin: str | None, host: str) -> bool:
     """Browsers always send Origin on cross-origin POST/WS. Same-origin (or
     non-browser clients like curl, which send none) is allowed; anything
@@ -124,38 +239,67 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Minimal hardening headers. HSTS only over HTTPS (else it would brick
     plain-HTTP local dev in browsers that cache it).
 
-    The CSP is the layer that would contain a future XSS: everything the app
-    loads is same-origin (static files, no third parties, no CDN), so a strict
-    policy costs nothing. `script-src 'unsafe-inline'` is required because the
-    auth pages and the admin panel each carry one inline script -- the
-    alternative is a nonce per response, which is more machinery than this
-    app warrants. What the policy still buys is the absence of any remote
-    origin: a payload that managed to execute could not POST the encrypted
-    channel keys or the TOFU pin to an attacker's server.
+    The CSP is the layer that would contain a future XSS. Everything the app
+    loads is same-origin -- static files, no third parties, no CDN -- so a
+    strict policy costs nothing, and nothing forces 'unsafe-inline':
+    every page's logic is an external .js file (login.js, register.js,
+    admin.js), so `script-src` is plain `'self'`. `style-src` still needs
+    'unsafe-inline' for two reasons: no nonce plumbing, and the identity
+    banner in api.js builds its own rules with element.style.cssText.
+
+    connect-src is built per response from the Host the client actually
+    reached. `'self'` alone would NOT permit the WebSocket -- a `ws:` scheme
+    is not same-origin with an `http:` page as far as CSP is concerned -- so
+    the app's own origin has to be spelled out in both forms. Deriving it
+    from Host is what keeps the policy tight: an injected script can reach no
+    host other than the one serving the page.
     """
 
-    CSP = "; ".join((
-        "default-src 'self'",
-        "script-src 'self' 'unsafe-inline'",
-        # No web fonts and no remote styles; element.style assignments (the
-        # identity banner, the DM error) are not blocked by CSP.
-        "style-src 'self' 'unsafe-inline'",
-        "img-src 'self' data:",
-        "font-src 'self'",
-        # Same-origin fetches plus the app's own WebSocket.
-        "connect-src 'self' ws: wss:",
-        "object-src 'none'",
-        "base-uri 'none'",
-        "form-action 'self'",
-        "frame-ancestors 'none'",
-    ))
+    @staticmethod
+    def _connect_src(host: str, scheme: str) -> str:
+        """Same-origin fetches plus the WebSocket, and nothing else.
+
+        An empty/unparseable Host yields no host sources at all. A broken Host
+        cannot widen the policy: without a host source a connect is refused
+        rather than allowed anywhere.
+        """
+        host = (host or "").strip()
+        if not host or any(c in host for c in " \t\r\n/\\\"'<>"):
+            return ""
+        # Plain HTTP may legitimately need ws://, but announcing it over TLS
+        # would hand an injected script a cleartext channel out.
+        ws_scheme = "wss" if scheme == "https" else "ws"
+        return f"'self' {ws_scheme}://{host}"
 
     async def dispatch(self, request, call_next):
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Content-Security-Policy"] = self.CSP
+        directives = [
+            "default-src 'self'",
+            # No 'unsafe-inline': every page's logic is an external file.
+            "script-src 'self'",
+            # Still needed: api.js styles the identity banner through
+            # element.style, and there are no inline <style> blocks.
+            "style-src 'self' 'unsafe-inline'",
+            "img-src 'self' data:",
+            "font-src 'self'",
+        ]
+        # connect-src is built from the Host the client reached. An absent or
+        # unusable Host yields NO connect-src at all, and with no directive
+        # the policy falls back to default-src -- which is 'self'. That blocks
+        # the WebSocket for that one response rather than for the app.
+        if connect_src := self._connect_src(request.headers.get("host"),
+                                             request.url.scheme):
+            directives.append(f"connect-src {connect_src}")
+        directives += [
+            "object-src 'none'",
+            "base-uri 'none'",
+            "form-action 'self'",
+            "frame-ancestors 'none'",
+        ]
+        response.headers["Content-Security-Policy"] = "; ".join(directives)
         if request.url.scheme == "https":
             response.headers["Strict-Transport-Security"] = (
                 "max-age=31536000; includeSubDomains"

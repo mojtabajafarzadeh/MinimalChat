@@ -38,6 +38,8 @@ priority is defaults < `.env` file < real environment variables.
 | `SESSION_IDLE_DAYS` | `14` | Idle session lifetime; a session unused this long is dead even inside the absolute window |
 | `SESSION_LIFETIME_DAYS` | `30` | Absolute session lifetime |
 | `RATE_LOGIN_PER_MIN` / `RATE_REGISTER_PER_MIN` / `RATE_MSG_PER_MIN` | `20` / `30` / `120` | Sliding-window rate limits (per IP / per IP / per user) |
+| `ADMIN_LOCKOUT_STEP` / `_GRACE` / `_MAX` | `1` / `5` / `120` | Backoff for failed admin logins: wait `STEP × 2^max(0, failures − GRACE)` seconds, capped at `MAX`. First 5 mistakes are free. `STEP=0` disables it |
+| `ADMIN_LOCKOUT_HALF_LIFE` | `300` | Seconds for a failed admin attempt to lose half its weight |
 | `ADMIN_PATH` | `/admin` | Address of the admin panel (letters, numbers, `_`, `-`) |
 | `ADMIN_PASSWORD` | empty (disabled) | Admin panel password. Empty = panel routes are 404. Use a long random value |
 | `ADMIN_PASSWORD_HASH` | empty | PBKDF2 hash of the admin password, preferred over the plaintext above. Wins when both are set |
@@ -318,6 +320,51 @@ is nothing yet to compare against. The panel says "not verified yet" for exactly
 that state — paste the fingerprint from the server log to turn a TOFU pin into
 a verified one, after which any change to it is caught.
 
+### Rotating the server key
+
+There is no CLI for this, deliberately: the file is 4 KB and hand-rotating it
+is a two-minute job, and a rotation tool is code that can be run at the wrong
+moment. `enc_keys.json` lives in `CHAT_DATA_DIR` and holds exactly one thing:
+the ECDSA P-256 **signing key**, base64-encoded, under the key `"sig"`. That is
+the key the published fingerprint is derived from. (The ECDH key is *not*
+stored — it is ephemeral per handshake, which is where forward secrecy comes
+from — so there is nothing else in this file.)
+
+**Stop the server first.** A client mid-handshake against a key that is
+replaced underneath it gets a failed session, which is survivable but noisy.
+
+```bash
+# 1. Stop the server, then keep a copy. This is the only way back.
+cp enc_keys.json enc_keys.json.bak
+
+# 2. Delete the whole file. `ensure_secret_file()` writes a fresh key on the
+#    next startup, so a partial edit is riskier than no edit: a file that is
+#    present but missing "sig" is rejected at load and the server refuses to
+#    start with a message about restoring the backup.
+rm enc_keys.json
+
+# 3. Start the server. It generates a new signing key and prints the new
+#    fingerprint in the startup banner.
+python run.py
+```
+
+Step 3 prints the **new** fingerprint. Every browser that had the old one
+pinned will now refuse to connect and show `IDENTITY CHANGED` with both values
+side by side — that is the check working, not a failure.
+
+**Telling your users about the new fingerprint is the part that matters.** A
+pin is only as good as the channel the new value travels over: if you announce
+the new fingerprint on the same chat it authenticates, an attacker who already
+controls that channel announces theirs too and the check is bypassed. Use the
+server console or SSH — something the browser cannot influence — and say
+plainly that the value changed and why. Users paste the new value into the
+identity panel; there is no "forget pin" button by design (see above).
+
+Rotating this key does not affect messages at rest: those are Fernet-encrypted
+under a different secret, `CHAT_ENCRYPTION_KEY` / `.chat_secret`. Losing *that*
+key makes stored history permanently unreadable; losing `enc_keys.json` costs
+nothing but the pins.
+
 ## Running behind a reverse proxy
 
 Rate limits and the WebSocket cap are keyed on the client IP. By default that
@@ -356,8 +403,8 @@ enable a minimal admin panel: list users, add users (works even when public
 registration is closed), delete users with all their messages, and reset
 passwords (active sessions are killed, forcing re-login). The panel uses a
 separate password-based session (12h, server-side, `HttpOnly` cookie) — the
-admin is not a chat user. Login attempts are rate-limited. Without
-`ADMIN_PASSWORD` the panel does not exist (all its URLs are 404).
+admin is not a chat user. Without `ADMIN_PASSWORD` the panel does not exist
+(all its URLs are 404).
 
 The password can be stored as a PBKDF2 hash instead of plaintext, which is
 preferred: `.env`, `/proc/<pid>/environ` and process listings are all readable
@@ -370,6 +417,40 @@ python -c "from app.auth import hash_password; print(hash_password(input()))"
 
 Put it in `ADMIN_PASSWORD_HASH`. That alone is enough to enable the panel; if
 both are set, the hash wins and `ADMIN_PASSWORD` is never compared.
+
+**Strongness is on you.** One credential guards every user and every message
+in the database — it can delete all of them. `run.py` warns at startup when the
+configured password is shorter than 12 characters or is a single character
+class, and tells you what to do about it; the check is skipped for the hash
+form because a hash hides the length. The warning is advisory, not a refusal:
+`python run.py` starts either way.
+
+### Brute-force protection
+
+Two independent limits, because they bound different things:
+
+| Limit | Bounds | Default |
+|---|---|---|
+| `RATE_ADMIN_LOGIN_PER_MIN` | how fast attempts may arrive | 10/min, per IP |
+| `ADMIN_LOCKOUT_STEP` / `_GRACE` / `_MAX` | how *many* attempts are worth making | see below |
+
+Below the window, each failure adds to a tally that decays with a 5-minute
+half-life, and the delay for the next attempt is
+`step × 2^max(0, failures − grace)` seconds:
+
+| Consecutive failures | 1–5 | 6 | 8 | 10 | 12+ |
+|---|---|---|---|---|---|
+| Wait (s) | 0 | 2 | 8 | 32 | 120 (capped) |
+
+So the first five mistakes are free — an operator who fat-fingers their own
+password is never locked out — and after that a scripted attack is down to one
+guess every two minutes. The tally clears the moment the right password
+arrives, and the half-life means walking away for ten minutes is enough to
+start over. Set `ADMIN_LOCKOUT_STEP=0` to keep only the sliding window.
+
+The tally is per client IP, the same scope as the window. A distributed run
+gets one tally per address, which is the limit of the single-process model —
+that is why the length check above exists rather than being decorative.
 
 ## Frontend
 

@@ -91,6 +91,14 @@ def _get_int(key: str, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(value, maximum))
 
 
+def _get_float(key: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(get(key, str(default)))
+    except ValueError:
+        return default
+    return max(minimum, min(value, maximum))
+
+
 # How long SQLite waits on a locked database before raising
 # "database is locked" (writes additionally retry, see db.execute).
 DB_BUSY_TIMEOUT_MS = _get_busy_timeout_ms()
@@ -114,6 +122,18 @@ RATE_LOGIN_PER_MIN = _get_int("RATE_LOGIN_PER_MIN", 20, 1, 10000)
 RATE_REGISTER_PER_MIN = _get_int("RATE_REGISTER_PER_MIN", 30, 1, 10000)
 RATE_MSG_PER_MIN = _get_int("RATE_MSG_PER_MIN", 120, 1, 100000)
 RATE_ADMIN_LOGIN_PER_MIN = _get_int("RATE_ADMIN_LOGIN_PER_MIN", 10, 1, 10000)
+# Backoff for FAILED admin logins (A-04). The sliding window above bounds the
+# rate of attempts; these bound the total, because the delay for the Nth
+# failure in a row is step * 2 ** max(0, N - grace) seconds. The grace period
+# keeps the first few fat-fingered attempts free; past it the curve doubles
+# per failure, so a scripted attack slows to nothing. Step 0 disables the
+# backoff entirely and leaves only the window.
+ADMIN_LOCKOUT_STEP = _get_float("ADMIN_LOCKOUT_STEP", 1.0, 0.0, 60.0)
+ADMIN_LOCKOUT_GRACE = _get_float("ADMIN_LOCKOUT_GRACE", 5.0, 0.0, 100.0)
+ADMIN_LOCKOUT_MAX = _get_float("ADMIN_LOCKOUT_MAX", 120.0, 0.0, 3600.0)
+# A failure counts half as much after this many seconds, so an operator who
+# fumbles a couple of times is never locked out.
+ADMIN_LOCKOUT_HALF_LIFE = _get_float("ADMIN_LOCKOUT_HALF_LIFE", 300.0, 10.0, 86400.0)
 
 # --- WebSocket connection limits (DoS guard) ---
 # The message rate limit bounds how much one socket can SAY, not how many

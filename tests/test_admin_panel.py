@@ -142,14 +142,59 @@ class AdminPanelTests(unittest.TestCase):
             self.admin_path + "/api/login", {"password": "wrong"}, jar)
         self.assertEqual(status, 401, f"wrong password accepted: {body}")
 
+    @staticmethod
+    def _panel_logic(page_html, fetch):
+        """The admin panel's LOGIC, exactly as the browser would load it.
+
+        The prefix lives in the logic, not the markup, so this has to follow
+        what the page actually references:
+
+        - a plain /static/admin.js src -> fetch it;
+        - a data: src -> decode it. page() uses that form to hand one script a
+          per-request value without rewriting the file on disk, and the
+          rewrite must never reach the browser through /static/ in that case.
+
+        Returns None when the page references no logic at all, and raises when
+        it references some that does not define the API prefix -- that is a
+        dead panel, which is the failure this whole test exists for.
+        """
+        import base64
+        import re
+
+        for url in re.findall(r'src="(data:[^"]+)"', page_html):
+            text = base64.b64decode(url.partition(",")[2]).decode("utf-8", "replace")
+            if "var API" in text:
+                return text
+
+        for src in re.findall(r'src="(/static/[^"]+\.js)"', page_html):
+            status, text = fetch(src)
+            if status != 200:
+                continue
+            if "var API" in text:
+                return text
+
+        raise AssertionError(
+            "the panel page references no script that defines its API prefix; "
+            "it would call nothing and the panel is dead")
+
     def test_the_panel_works_under_a_custom_admin_path(self):
         """ADMIN_PATH is configurable, so a fix hardcoding /admin/api would
-        pass the default case and still be wrong."""
+        pass the default case and still be wrong.
+
+        The prefix lands in the panel's LOGIC rather than the markup now --
+        that logic moved out of an inline <script> so the CSP could drop
+        'unsafe-inline' -- so the page is checked for the script it loads and
+        the loaded script for the prefix."""
         self._boot(enc_enabled=False, admin_path="/my-control-panel")
         status, body = self._get(self.admin_path)
         self.assertEqual(status, 200)
-        self.assertIn("/my-control-panel/api", body,
-                      "the page does not point at its own prefix")
+
+        logic = self._panel_logic(body, self._get)
+        self.assertIn("/my-control-panel/api", logic,
+                      "the panel's logic does not point at its own prefix")
+        self.assertNotIn("__ADMIN_API__", logic,
+                         "the placeholder was never replaced; the panel would "
+                         "call __ADMIN_API__/users and nothing else")
 
         jar = http.cookiejar.CookieJar()
         status, body = self._post_jar(

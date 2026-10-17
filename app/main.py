@@ -14,8 +14,10 @@ connections. Each connection still awaits its own messages sequentially, so
 per-sender order is preserved.
 """
 import asyncio
+import base64
 import json
 import logging
+import re
 import sqlite3
 from pathlib import Path
 
@@ -48,10 +50,14 @@ from .config import (
 from .security import (
     ChannelOnlyMiddleware,
     SecurityHeadersMiddleware,
+    admin_delay,
+    admin_failures,
     check_rate_limit,
+    clear_admin_failures,
     client_ip,
     configure_trusted_proxies,
     origin_allowed,
+    register_admin_failure,
 )
 from .websocket import manager
 
@@ -122,21 +128,72 @@ def current_user(request: Request):
     return auth.get_session_user(request.cookies.get(SESSION_COOKIE))
 
 
-def page(name: str, **inject: str) -> FileResponse:
-    """Serve a static page, optionally replacing `__NAME__` placeholders.
+def page(name: str, asset_inject: dict | None = None,
+         **js_inject: str) -> FileResponse:
+    """Serve a static page, rewriting placeholders in it AND its scripts.
 
-    The admin panel is served at a configurable prefix and its API lives
-    under that same prefix, but a relative "./api" resolves against the
+    Two different placeholders, because the two live in different files:
+
+    `js_inject` (ADMIN_API) goes into the page and into every script it
+    loads, so a page's logic can be an external file -- which is what lets the
+    CSP drop 'unsafe-inline' -- and still be configured per request.
+    `asset_inject` goes into the page only; that is what a script src needs.
+
+    The admin panel is served at a configurable prefix and its API lives under
+    that same prefix, but a relative "./api" in admin.js resolves against the
     *document* URL -- which has no trailing slash -- so it escapes to /api
-    and hits the user endpoints. Injecting the real prefix keeps the page
+    and hits the user endpoints. Injecting the real prefix keeps the panel
     correct for whatever ADMIN_PATH is set to.
+
+    The rewrite must NOT be written back to the file. It used to be, which
+    meant the FIRST panel visit permanently burned __ADMIN_API__ into the
+    checked-in admin.js: a second server on the same tree with a different
+    ADMIN_PATH then served the first one's prefix, and a fresh checkout could
+    ship a mutated static file. Everything is in memory and recomputed per
+    request, which costs one pass over each script at panel load.
     """
-    if not inject:
-        return FileResponse(STATIC_DIR / name)
     html = (STATIC_DIR / name).read_text(encoding="utf-8")
-    for key, value in inject.items():
+    for key, value in js_inject.items():
+        token = f"__{key}__"
+        html = html.replace(token, value)
+        for script in _script_srcs(html):
+            if not script.is_file():
+                continue
+            try:
+                text = script.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if token in text:
+                html = html.replace(
+                    "/static/" + script.relative_to(STATIC_DIR).as_posix(),
+                    _script_with_token(script, token, value))
+    for key, value in (asset_inject or {}).items():
         html = html.replace(f"__{key}__", value)
     return HTMLResponse(html)
+
+
+def _script_srcs(html: str) -> list:
+    """The scripts a page references, as Paths under STATIC_DIR.
+
+    src values look like "/static/app.js", but STATIC_DIR is the mount point
+    ITSELF, so joining that with the absolute-looking src would escape the
+    directory entirely (Path.__truediv__ with an absolute right side
+    discards the left). lstrip the prefix before joining.
+    """
+    return [STATIC_DIR / src.lstrip("/").removeprefix("static/")
+            for src in re.findall(r'src="/static/([^"]+\.js)"', html)]
+
+
+def _script_with_token(script: Path, token: str, value: str) -> str:
+    """A data: URL carrying `script` with `token` replaced by `value`.
+
+    Used only for the few scripts that carry a per-request placeholder. The
+    URL is ~1.3x the file size, which a browser decompresses; the alternative
+    was rewriting the file on disk, and that is not a trade worth making.
+    """
+    text = script.read_text(encoding="utf-8").replace(token, value)
+    return "data:text/javascript;base64," + base64.b64encode(
+        text.encode("utf-8")).decode("ascii")
 
 
 def valid_username(v: str) -> bool:
@@ -553,10 +610,22 @@ if admin.enabled():
     def admin_login(request: Request, password: str = Form("")):
         if (resp := _bad_origin(request)) is not None:
             return resp
-        if (resp := _too_many(f"admin:{_client_ip(request)}", RATE_ADMIN_LOGIN_PER_MIN)) is not None:
+        # The window bounds the RATE of attempts; the backoff below bounds the
+        # TOTAL, which is what actually makes an online dictionary attack
+        # impractical (A-04). The rate key is kept identical so the two cannot
+        # drift apart and leave a source of unbounded attempts open.
+        key = f"admin:{_client_ip(request)}"
+        if (resp := _too_many(key, RATE_ADMIN_LOGIN_PER_MIN)) is not None:
             return resp
+        wait = admin_delay(admin_failures(key))
+        if wait > 0:
+            return JSONResponse(
+                {"error": "Too many failed attempts. Wait before trying again."},
+                status_code=429, headers={"Retry-After": str(max(1, round(wait)))})
         if not password or not admin.verify_password(password):
+            register_admin_failure(key)
             return JSONResponse({"error": "Invalid admin password."}, status_code=401)
+        clear_admin_failures(key)
         resp = JSONResponse({"ok": True})
         resp.set_cookie(
             admin.ADMIN_COOKIE,

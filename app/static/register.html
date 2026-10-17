@@ -9,6 +9,7 @@
 <script src="/static/enc.js"></script>
 <script src="/static/api.js"></script>
 <script src="/static/identity.js" defer></script>
+<script src="/static/register.js" defer></script>
 </head>
 <body>
 <button class="btn btn-secondary btn-icon theme-float" data-theme-toggle type="button" aria-label="Toggle dark mode">🌙</button>
@@ -30,34 +31,5 @@
     <div id="identity-panel"></div>
   </form>
 </div>
-<script>
-const form = document.getElementById('form');
-const err = document.getElementById('error');
-function show(msg) {
-  err.textContent = msg;
-  err.classList.remove('hidden');
-}
-Api.boot().then((st) => {
-  if (!st.config.registration_enabled) {
-    show('Registration is disabled on this server.');
-    form.querySelector('button').disabled = true;
-  }
-}).catch((e) => { show('Encrypted channel unavailable: ' + e.message); });
-form.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  err.classList.add('hidden');
-  const btn = form.querySelector('button');
-  btn.disabled = true;
-  try {
-    await Api.register(document.getElementById('name').value.trim(),
-                       document.getElementById('username').value.trim(),
-                       document.getElementById('password').value,
-                       document.getElementById('confirm').value);
-    location.href = '/chat';
-  } catch (ex) {
-    show(ex.message || 'Registration failed.');
-  } finally { btn.disabled = false; }
-});
-</script>
 </body>
 </html>
