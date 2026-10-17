@@ -511,6 +511,47 @@ the count out ("Private chat with @bob, 2 unread messages") so the digits are
 not read as part of the name. Verified in a real browser against a real
 WebSocket in `tests/test_unread_badges.py`.
 
+### Desktop notifications
+
+A 🔕 button in the header turns them on. It only appears when the browser can
+actually grant the permission: on a desktop OS notification support it appears
+on load, and if you have blocked notifications for the site the browser reports
+`denied` and there is nothing left to ask for, so the button stays hidden
+rather than offering a toggle that cannot change anything. The choice is kept
+in `localStorage`; permission itself is the browser's, and a revoked permission
+hides the button again on the next load.
+
+A notification appears only for a message in a conversation you are **not**
+looking at, and only while the tab is in the background. The unread badge above
+already answers "did something arrive"; a toast on top of what you can read is
+noise. Clicking a notification focuses the tab and opens the conversation it
+came from.
+
+**The text is deliberately generic — "New message" or "New private message",
+never a preview and never the sender's name.** A notification is drawn by the
+OS on the lock screen, and on some platforms its history syncs between a user's
+devices, so a channel that exists to keep message bodies off other people's
+screens must not reopen that hole through the notification. The conversation is
+carried by an opaque tag rather than the sender's handle, so nothing in the
+notification identifies who wrote to you. If you would rather see who, that is
+a deliberate trade rather than an oversight.
+
+**Scope, and what it is not.** This runs only while the tab is open and
+JavaScript is running. There is no service worker and no push, so a closed tab,
+a suspended one, or a browser that froze it in the background gets nothing —
+only the tab's title count survives that, and only while the tab exists. That
+ceiling is a consequence of the design rather than an omission: the channel keys
+live in `sessionStorage`, which a service worker cannot read, so any
+background delivery would have to move message bodies or a plaintext count out
+of the page, and the server would then learn when each user is at their
+keyboard. `tests/test_notifications.py` pins the current ceiling as well as the
+behaviour, so widening it has to be a decision made on purpose.
+
+Verified in a real browser against a real WebSocket in
+`tests/test_notifications.py`, which also records the `Notification` constructor
+to check the text and tag, since a headless browser emits no observable event
+for a notification at all.
+
 ## Features
 
 - Registration / login / logout (PBKDF2 password hashing, server sessions)
@@ -526,7 +567,9 @@ WebSocket in `tests/test_unread_badges.py`.
 - Presence: a dot beside each conversation marks who is currently connected.
   It is per-process, so it is only reported when `WORKERS=1` (the default) —
   with several workers a user on another worker would look offline.
-- Dark mode with header toggle (preference saved, follows system by default)
+- Desktop notifications for messages in conversations you are not viewing,
+  and an unread count in the tab title. Neither carries message text; see
+  "Desktop notifications" above for what that feature deliberately cannot do.
 - `Ctrl`/`Cmd`+`Enter` sends from the composer as well as clicking Send
 
 ## Message encryption (at rest — NOT end-to-end)

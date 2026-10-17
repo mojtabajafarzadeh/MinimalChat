@@ -191,6 +191,34 @@ class CdpSession:
         """Cookies live in the browser profile, so they outlive a single test."""
         self.send("Network.clearBrowserCookies")
 
+    def on_new_document(self, source):
+        """Install a script that runs before any page script on every load.
+
+        Needed when the thing to be observed is created by page code and then
+        discarded, with no trace left to read afterwards. The alternative --
+        assigning `window.Foo` and reading it later -- cannot see a
+        constructor that the page replaced, and the CSP blocks a page-level
+        <script> for doing this the obvious way.
+        """
+        return self.send("Page.addScriptToEvaluateOnNewDocument", source=source)
+
+    def drain(self, seconds):
+        """Read protocol traffic for a while without answering anything.
+
+        Events are discarded. Callers need this only so a socket with events
+        queued on it stays responsive instead of buffering.
+        """
+        self.ws.settimeout(0.25)
+        deadline = time.time() + seconds
+        try:
+            while time.time() < deadline:
+                try:
+                    self.ws.recv()
+                except Exception:
+                    pass
+        finally:
+            self.ws.settimeout(30)
+
 
 @unittest.skipUnless(HAVE_WEBSOCKET, "needs the websocket-client module")
 @unittest.skipIf(_find_chrome() is None, "needs a Chrome/Chromium binary")

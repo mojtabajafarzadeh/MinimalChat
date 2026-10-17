@@ -14,6 +14,7 @@
   const dmForm = document.getElementById('dm-form');
   const dmInput = document.getElementById('dm-input');
   const dmError = document.getElementById('dm-error');
+  const notifBtn = document.getElementById('notif-toggle');
   let me = null;
   let ws = null;
   let retryMs = 1000;
@@ -26,6 +27,12 @@
   // feature -- it answers "did something arrive while I was looking
   // elsewhere", which is a question about this page load.
   let unread = Object.create(null);
+  // Unread count for the tab badge, and whether the user asked for desktop
+  // notifications at all. Like `unread`, both live in the page: nothing is
+  // sent to the server and the decision survives only as long as this tab
+  // plus the one localStorage key below.
+  let wantNotifications = false;
+  const BASE_TITLE = 'Chat room \u2014 Minimal Chat';
   // conversation key -> {button, badge, label}, so a badge update never
   // rebuilds the list and never steals focus from someone tabbing through it.
   let convRows = Object.create(null);
@@ -200,15 +207,149 @@
     Object.keys(convRows).forEach((k) => paintRow(convRows[k]));
   }
 
+  /* Desktop notifications (option A) and the tab's unread count (option D).
+
+     Both are driven from the same two calls that already moved the badges,
+     so they cannot disagree with them.
+
+     The text is deliberately generic -- "New message", never a preview and
+     never the sender's name. A notification is rendered by the OS on the
+     lock screen and, on some platforms, syncs its history between a user's
+     devices; a channel that exists to keep message bodies off other people's
+     screens must not reopen that hole through the notification itself. The
+     click handler closes over the conversation instead, so not even the tag
+     has to name the other party -- see tagFor().
+
+     Scope, and what it is not: this only runs while this tab is open and
+     JavaScript is running. There is no service worker and no push, so a
+     closed tab, a suspended one, or a browser that froze it in the background
+     gets nothing. That ceiling is deliberate -- the channel keys live in
+     sessionStorage, which a service worker cannot read, so any background
+     delivery would have to move message bodies (or a plaintext count) out of
+     the page to get there. */
+  const notifSupported = 'Notification' in window;
+  const NOTIFY_KEY = 'chat-notify';
+  // conversation key -> an opaque tag. The OS needs a stable string so a burst
+  // replaces its own notification rather than stacking, and the click handler
+  // needs to know which conversation to open -- but neither needs the other
+  // party's name. A tag is not rendered, yet it is notification metadata that
+  // some platforms keep and hand to companion apps, so it gets a number like
+  // the rest. The click closes over `kind`/`username` directly and never has to
+  // parse it back.
+  const notifTags = Object.create(null);
+  let notifSeq = 0;
+
+  function tagFor(key) {
+    if (!notifTags[key]) {
+      notifSeq += 1;
+      notifTags[key] = 'chat:' + notifSeq;
+    }
+    return notifTags[key];
+  }
+
+  function storedNotify() {
+    try { return localStorage.getItem(NOTIFY_KEY); } catch (e) { return null; }
+  }
+
+  /* The tab badge is the one notification surface that cannot leak: it is a
+     number, it lives only in this tab's title bar, and it is never sent
+     anywhere. It is always on -- unlike the OS notification it needs no
+     permission, so a user who declines still sees that something arrived. */
+  function unreadTotal() {
+    let n = 0;
+    for (const k in unread) n += unread[k];
+    return n;
+  }
+
+  function paintTitle() {
+    const n = unreadTotal();
+    document.title = n ? '(' + n + ') ' + BASE_TITLE : BASE_TITLE;
+  }
+
+  /* Fired from markUnread, i.e. only for a message that is genuinely not on
+     screen. `kind`/`username` stay here: they close over the click handler,
+     and reach the notification only through an opaque tag, so a burst still
+     replaces its own notification without either ever being displayed. */
+  function notifyIncoming(kind, username) {
+    if (!wantNotifications || !notifSupported) return;
+    if (Notification.permission !== 'granted') return;
+    // A visible tab is not a background event. The unread badge already
+    // covers that case, and a toast on top of what you can read is noise.
+    if (document.visibilityState === 'visible') return;
+    const key = convKey(kind, username);
+    const label = kind === 'dm' ? 'New private message' : 'New message';
+    let n;
+    try {
+      n = new Notification(label, {
+        // Tag only, never a preview: this is what groups a burst.
+        tag: tagFor(key),
+        renotify: true,
+      });
+    } catch (e) {
+      // Some browsers throw for a tag-only notification, and the
+      // constructor is not the only way this can fail. Never let a
+      // notification take down message rendering.
+      return;
+    }
+    n.onclick = function () {
+      try { window.focus(); } catch (e) { /* not fatal */ }
+      if (kind === 'dm') openDm(username);
+      else openPublic();
+      try { n.close(); } catch (e) { /* already gone */ }
+    };
+  }
+
+  /* The permission has to be requested from a user gesture: outside one,
+     browsers ignore the call or resolve it 'default', so asking from the
+     click is the only shape that works. */
+  function askForNotifications() {
+    if (!notifSupported) {
+      notifBtn.hidden = true;
+      return;
+    }
+    if (Notification.permission === 'granted') {
+      wantNotifications = true;
+    } else if (Notification.permission === 'denied') {
+      // Nothing left to ask for. Leave the button out rather than offer a
+      // toggle that cannot change anything.
+      notifBtn.hidden = true;
+      return;
+    }
+    notifBtn.hidden = false;
+    paintNotifBtn();
+  }
+
+  function paintNotifBtn() {
+    if (!notifBtn) return;
+    const on = wantNotifications && Notification.permission === 'granted';
+    // U+1F514 / U+1F515, spelled as escapes rather than literal emoji to
+    // match how theme.js handles glyphs (and to keep the file's encoding
+    // assumptions obvious at a glance).
+    notifBtn.textContent = on ? '\uD83D\uDD14' : '\uD83D\uDD15';
+    // No class for the on-state: .btn-ghost already paints the button, and the
+    // glyph carries the state. An earlier version of this also added a
+    // .notif-on class, whose rule turned out to restate what .btn-ghost sets
+    // and changed no measured contrast -- a hook with nothing behind it.
+    notifBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    notifBtn.setAttribute('aria-label',
+      on ? 'Turn off desktop notifications' : 'Turn on desktop notifications');
+    notifBtn.title = on
+      ? 'Desktop notifications on'
+      : 'Desktop notifications off';
+  }
+
   function markUnread(kind, username) {
     const key = convKey(kind, username);
     unread[key] = (unread[key] || 0) + 1;
     paintBadges();
+    paintTitle();
+    notifyIncoming(kind, username);
   }
 
   function markRead(kind, username) {
     delete unread[convKey(kind, username)];
     paintBadges();
+    paintTitle();
   }
 
   function renderConversations() {
@@ -433,6 +574,31 @@
       showDmError('Could not find user. Try again.');
     }
   });
+
+  if (notifBtn) {
+    notifBtn.addEventListener('click', async () => {
+      if (!notifSupported) return;
+      if (wantNotifications && Notification.permission === 'granted') {
+        wantNotifications = false;
+        try { localStorage.setItem(NOTIFY_KEY, 'off'); } catch (e) {}
+        paintNotifBtn();
+        return;
+      }
+      // Asked here, from the click, so it counts as a user gesture.
+      const p = await Notification.requestPermission();
+      wantNotifications = p === 'granted';
+      if (wantNotifications) {
+        try { localStorage.setItem(NOTIFY_KEY, 'on'); } catch (e) {}
+      }
+      paintNotifBtn();
+      if (!notifBtn.hidden && !wantNotifications) notifBtn.hidden = true;
+    });
+    // Restored from the previous choice. Permission itself is the browser's
+    // to grant, so this only records the user's preference: if it has since
+    // been revoked, askForNotifications() hides the button instead.
+    wantNotifications = storedNotify() === 'on' && Notification.permission === 'granted';
+    askForNotifications();
+  }
 
   document.getElementById('logout').addEventListener('click', async () => {
     try { await Api.logout(); } catch (e) {}
