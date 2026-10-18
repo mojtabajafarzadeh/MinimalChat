@@ -92,9 +92,18 @@ RECORDER = """
 STATE = """
 (() => {
   const b = document.getElementById('notif-toggle');
+  // Geometry, not `b.hidden`. The element is hidden through a class that is
+  // `display:none !important`, so the property can read false while the button
+  // is zero-width on screen; only the box tells the truth.
+  const r = b ? b.getBoundingClientRect() : null;
+  const cs = b ? getComputedStyle(b) : null;
   return {
     title: document.title,
     bellHidden: b ? b.hidden : null,
+    bellDisplay: cs ? cs.display : null,
+    bellWidth: r ? r.width : null,
+    // What a user could actually click.
+    bellHittable: !!(r && r.width > 0 && r.height > 0 && cs.display !== 'none'),
     bellPressed: b ? b.getAttribute('aria-pressed') : null,
     bellLabel: b ? b.getAttribute('aria-label') : null,
     bellGlyph: b ? b.textContent : null,
@@ -254,23 +263,25 @@ class NotificationTests(unittest.TestCase):
         except Exception:
             pass
 
-    def _new_target(self, url="about:blank"):
-        """Open a new browser target.
+    def _new_target(self, url="about:blank", cdp_port=None):
+        """Open a new browser target on `cdp_port`, or the class-wide browser.
 
         `PUT /json/new` is the only verb the endpoint accepts; a GET is
         answered 405. This build has no --remote-allow-origins problem
         because the WebSocket is opened with suppress_origin.
         """
         req = urllib.request.Request(
-            f"http://127.0.0.1:{self.cdp_port}/json/new?{url}", method="PUT")
+            f"http://127.0.0.1:{cdp_port or self.cdp_port}/json/new?{url}",
+            method="PUT")
         with urllib.request.urlopen(req, timeout=15) as r:
             return json.loads(r.read().decode("utf-8"))
 
-    def _close_target(self, target_id):
+
+    def _close_target(self, target_id, cdp_port=None):
         try:
             urllib.request.urlopen(urllib.request.Request(
-                f"http://127.0.0.1:{self.cdp_port}/json/close/{target_id}"),
-                timeout=15).read()
+                f"http://127.0.0.1:{cdp_port or self.cdp_port}"
+                f"/json/close/{target_id}"), timeout=15).read()
         except Exception:
             pass
 
@@ -279,13 +290,12 @@ class NotificationTests(unittest.TestCase):
             f"http://127.0.0.1:{self.cdp_port}/json/activate/{target_id}"),
             timeout=15).read()
 
-    def _open_page(self, grant=False):
-        target = self._new_target()
+    def _open_page(self, grant=False, cdp_port=None):
+        target = self._new_target(cdp_port=cdp_port)
         ws = websocket.create_connection(target["webSocketDebuggerUrl"], timeout=30,
                                          suppress_origin=True)
         session = CdpSession(ws)
         session.ws.settimeout(30)
-        session._target = target          # for teardown
         session.targetId = target["id"]
         session.send("Page.enable")
         session.send("Runtime.enable")
@@ -299,6 +309,17 @@ class NotificationTests(unittest.TestCase):
                          origin=self.base, permissions=["notifications"])
         return session
 
+    def clear_permission_override(self):
+        """Drop the setUp grant so a lower-priority setting can apply.
+
+        `Browser.grantPermissions` installs a permission *override* for the
+        origin, and an override wins over `Browser.setPermission`: asking for
+        "prompt" while a grant exists still reads 'granted'. So the grant is
+        cleared with an empty list first.
+        """
+        self.page.send("Browser.grantPermissions",
+                       origin=self.base, permissions=[])
+
     def state(self):
         found = self.page.evaluate(STATE)
         # Which conversation is open decides what counts as unread, so carry
@@ -310,6 +331,68 @@ class NotificationTests(unittest.TestCase):
 
     def calls(self):
         return self.state()["calls"]
+
+    @staticmethod
+    def _read(session):
+        """Read the feature's state from any session, not just self.page.
+
+        A few tests deliberately drive a second target, where "the page" is not
+        the one setUp made.
+        """
+        out = session.evaluate(STATE)
+        out["view"] = session.evaluate(
+            "document.getElementById('view-title').textContent")
+        return out
+
+    def _sign_in(self, session, cdp_port=None):
+        """Give a session a session cookie, the way setUp gives self.page one."""
+        session.send("Emulation.setDeviceMetricsOverride", width=1280,
+                     height=800, deviceScaleFactor=1, mobile=False)
+        session.send("Network.setCookie", name="session_id",
+                     value=self._session_cookie(self.alice),
+                     domain="127.0.0.1", path="/")
+
+    def _page_for_permission(self, setting):
+        """A signed-in page whose notification permission reads back as
+        `setting`, without disturbing the one self.page already has.
+
+        The grant installed by setUp is cleared first, because
+        `Browser.grantPermissions` is an *override* and overrides win:
+        setting "prompt" underneath one still reads 'granted'.
+
+        Preferred: a brand-new browser context, which has never answered this
+        site's prompt. Chrome in this environment answers "Not allowed" to
+        Target.createBrowserContext, so the fallback sets the state through the
+        protocol -- on its own target either way, because the permission lives
+        on the profile and a shared one leaks between tests.
+        """
+        self.clear_permission_override()
+        context = None
+        try:
+            context = self.page.send("Target.createBrowserContext")
+        except RuntimeError:
+            pass
+        if context:
+            page = self._open_page(
+                browser_context_id=context["browserContextId"])
+            self.addCleanup(self._dispose_context, context["browserContextId"])
+        else:
+            page = self._open_page()
+            self.addCleanup(self._close_target, page.targetId)
+        self._sign_in(page)
+        page.send("Browser.setPermission",
+                  permission={"name": "notifications"}, setting=setting)
+        page.on_new_document(RECORDER)
+        page.goto(self.base + "/chat")
+        time.sleep(1.5)
+        return page
+
+    def _dispose_context(self, context_id):
+        try:
+            self.page.send("Target.disposeBrowserContext",
+                           browserContextId=context_id)
+        except Exception:
+            pass
 
     def sender(self, username):
         """One WebSocket per sending account, for the whole test.
@@ -608,13 +691,157 @@ class NotificationTests(unittest.TestCase):
         a dead control."""
         found = self.state()
         self.assertEqual("granted", found["permission"])
-        self.assertFalse(found["bellHidden"],
-                         "the bell is still hidden with permission granted, so "
-                         "there is no way to turn notifications on")
+        self.assertTrue(found["bellHittable"],
+                        "with permission granted the bell must be clickable, "
+                        f"but its box is {found['bellWidth']} wide with "
+                        f"display:{found['bellDisplay']}")
         self.assertEqual("true", found["bellPressed"],
                          "a granted permission should leave the bell pressed")
         self.assertIn("Turn off", found["bellLabel"],
                       "the bell's name should describe what it does now")
+
+    def test_the_bell_is_reachable_before_the_permission_is_answered(self):
+        """The state a local user is in on a first visit: nothing granted,
+        nothing asked -- and the case the bell exists for, since asking is the
+        whole point of it.
+
+        It is also the case that broke. The code cleared the `hidden` property
+        while the class `hidden` stayed on the element, and that class is
+        `display:none !important`, so the button sat in the DOM at zero width
+        and could not be clicked -- on every deployment that does not already
+        hold a grant, which is every first visit anywhere. The test that shipped
+        checked `element.hidden`, which read false the whole time, so it
+        passed.
+
+        Hence the box rather than the property: only the geometry says whether
+        a control can be clicked.
+
+        This needs a browser that has never seen the site. The class-wide Chrome
+        has already had its prompt answered -- by an earlier test clicking the
+        bell -- so it reports 'denied', and hiding the bell there is correct
+        behaviour, not the bug. Only a fresh profile reads 'default'.
+        """
+        cdp_port = self._fresh_browser()
+        base = self.base
+        session = self._open_page(cdp_port=cdp_port)
+        self.addCleanup(self._close_target, session.targetId, cdp_port)
+        self._sign_in(session, cdp_port=cdp_port)
+        session.on_new_document(RECORDER)
+        session.goto(base + "/chat")
+        time.sleep(2.0)
+
+        found = self._read(session)
+        self.assertEqual("/chat", session.evaluate("location.pathname"),
+                         "the fresh browser is not signed in, so /chat "
+                         "redirected and none of this measured the chat page")
+        self.assertEqual("default", found["permission"],
+                         "a profile that has never seen the site reports the "
+                         "prompt as unanswered, not as denied")
+        self.assertTrue(found["bellHittable"],
+                        "before the permission is answered the bell is the "
+                        f"only way to ask for it, so it must be clickable; "
+                        f"instead its box was {found['bellWidth']} wide with "
+                        f"display:{found['bellDisplay']}")
+        self.assertEqual("false", found["bellPressed"])
+        self.assertIn("Turn on", found["bellLabel"],
+                      "a bell with nothing granted should offer to turn them on")
+
+        # Clicking is what a user does, and it is what asks the browser.
+        self.assertEqual("clicked", session.evaluate(
+            "document.getElementById('notif-toggle').click(); 'clicked'"))
+        time.sleep(1.0)
+        found = self._read(session)
+        self.assertEqual("default", found["permission"],
+                         "headless cannot show a prompt, so the click cannot "
+                         "have resolved anything but the un-asked state")
+        self.assertTrue(found["bellHittable"],
+                        "an unanswered prompt must leave the bell clickable, "
+                        f"not in a half state; its box was {found['bellWidth']} "
+                        f"wide with display:{found['bellDisplay']}")
+
+        # And it must survive a second load, which is the path that lost it.
+        session.goto(base + "/chat")
+        time.sleep(1.5)
+        self.assertTrue(self._read(session)["bellHittable"],
+                        "the bell lost its box on the second page load")
+
+    def _fresh_browser(self):
+        """A second Chrome, on its own profile, and its debugging port.
+
+        One browser per class is the norm here, but a notification prompt is
+        answered once per profile and never forgotten: by the time this test
+        runs, the shared profile has a decision recorded and reports 'denied'.
+        A new profile is the only way to see what a first-time user sees.
+        """
+        profile = tempfile.mkdtemp(prefix="chrome-firstvisit-")
+        port = _free_port()
+        proc = subprocess.Popen(
+            [_find_chrome(), "--headless=new", "--no-sandbox", "--disable-gpu",
+             "--disable-dev-shm-usage", f"--remote-debugging-port={port}",
+             f"--user-data-dir={profile}", "about:blank"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        def stop():
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            shutil.rmtree(profile, ignore_errors=True)
+
+        self.addCleanup(stop)
+        if not _wait_http(f"http://127.0.0.1:{port}/json/version"):
+            self.skipTest("a second headless Chrome did not start")
+        return port
+
+    def test_no_bell_appears_where_notifications_are_impossible(self):
+        """A browser without Notification at all: an old Firefox, an in-app
+        webview, a locked-down build. There the only defensible bell is none,
+        because every click would do nothing.
+
+        Not reachable by configuration -- Chrome always ships Notification --
+        so the global is removed for the one page load rather than skipping a
+        case nobody can observe. It has to be a delete, not a redefinition:
+        `Notification` is an accessor on Window and a value assigned over it
+        is replaced by the browser before the page's own script runs, which is
+        what a getter here produced.
+        """
+        self.setUpSender()
+        fresh = self._page_for_permission("granted")
+        try:
+            fresh.on_new_document("delete window.Notification;")
+            fresh.goto(self.base + "/chat")
+            time.sleep(1.5)
+            found = self._read(fresh)
+            self.assertFalse(found["notificationSupport"],
+                             "Notification is still defined, so this measured "
+                             "the supported case again")
+            self.assertEqual("/chat", fresh.evaluate("location.pathname"))
+            self.assertFalse(found["bellHittable"],
+                            "the bell is clickable in a browser that has no "
+                            "notifications, so it offers a dead control")
+        finally:
+            # The override is installed for every later load; undo it so it
+            # cannot leak into the rest of the class.
+            fresh.send("Page.removeScriptToEvaluateOnNewDocument",
+                       identifier="1")
+
+    def test_the_bell_disappears_once_the_permission_is_denied(self):
+        """Nothing left to ask for. A visible toggle the user cannot move is a
+        control that lies about what it can do."""
+        self.setUpSender()
+        self.clear_permission_override()
+        self.page.send("Browser.setPermission",
+                       permission={"name": "notifications"}, setting="denied")
+        self.page.goto(self.base + "/chat")
+        time.sleep(1.5)
+
+        found = self.state()
+        self.assertEqual("denied", found["permission"])
+        self.assertFalse(found["bellHittable"],
+                        "the bell is still clickable after the permission was "
+                        "denied, so it offers a choice that cannot be made")
 
     def test_the_bell_is_readable_against_the_header_in_both_themes(self):
         """Measured, not asserted.

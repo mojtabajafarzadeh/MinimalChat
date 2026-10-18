@@ -299,12 +299,19 @@
     };
   }
 
-  /* The permission has to be requested from a user gesture: outside one,
-     browsers ignore the call or resolve it 'default', so asking from the
-     click is the only shape that works. */
+  /* Shown and hidden through the `hidden` CLASS, like every other element in
+     this app (the reply bar, the login error). Setting the `hidden` property
+     instead looks equivalent and is not: the class is `display:none
+     !important`, so clearing the property left the bell in the DOM at zero
+     width -- invisible and unclickable, while `element.hidden` reported false
+     and any test reading that believed it. One mechanism, not two. */
+  function showNotifBtn(show) {
+    notifBtn.classList.toggle('hidden', !show);
+  }
+
   function askForNotifications() {
     if (!notifSupported) {
-      notifBtn.hidden = true;
+      showNotifBtn(false);
       return;
     }
     if (Notification.permission === 'granted') {
@@ -312,10 +319,10 @@
     } else if (Notification.permission === 'denied') {
       // Nothing left to ask for. Leave the button out rather than offer a
       // toggle that cannot change anything.
-      notifBtn.hidden = true;
+      showNotifBtn(false);
       return;
     }
-    notifBtn.hidden = false;
+    showNotifBtn(true);
     paintNotifBtn();
   }
 
@@ -590,8 +597,12 @@
       if (wantNotifications) {
         try { localStorage.setItem(NOTIFY_KEY, 'on'); } catch (e) {}
       }
+      // Only 'denied' retires the bell. Anything else -- 'granted' or 'default'
+      // -- leaves it in place, because a prompt the user dismissed or has not
+      // answered yet is not a refusal, and hiding the only control that can
+      // ask again would strand them with no way to turn notifications on.
       paintNotifBtn();
-      if (!notifBtn.hidden && !wantNotifications) notifBtn.hidden = true;
+      if (Notification.permission === 'denied') showNotifBtn(false);
     });
     // Restored from the previous choice. Permission itself is the browser's
     // to grant, so this only records the user's preference: if it has since

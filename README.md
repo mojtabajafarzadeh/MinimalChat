@@ -513,13 +513,16 @@ WebSocket in `tests/test_unread_badges.py`.
 
 ### Desktop notifications
 
-A 🔕 button in the header turns them on. It only appears when the browser can
-actually grant the permission: on a desktop OS notification support it appears
-on load, and if you have blocked notifications for the site the browser reports
-`denied` and there is nothing left to ask for, so the button stays hidden
-rather than offering a toggle that cannot change anything. The choice is kept
-in `localStorage`; permission itself is the browser's, and a revoked permission
-hides the button again on the next load.
+A 🔕 button in the header turns them on. It appears whenever the permission
+has not been refused yet — including on your first visit, which is the only
+moment it can be asked for. If you have blocked notifications for the site the
+browser reports `denied` and there is nothing left to ask for, so the button
+stays hidden rather than offering a toggle that cannot change anything. A
+prompt you dismissed or have not answered is *not* a refusal, so the button
+stays; only `denied` retires it.
+
+The choice is kept in `localStorage`; permission itself is the browser's, and a
+permission revoked later hides the button again on the next load.
 
 A notification appears only for a message in a conversation you are **not**
 looking at, and only while the tab is in the background. The unread badge above
