@@ -957,6 +957,171 @@ class BellButtonTests(unittest.TestCase):
                       "the bell needs a name before it is pressed")
 
 
+class BellVisibilityTests(unittest.TestCase):
+    """The bell is hidden or shown in exactly one place, and this pins that.
+
+    The reason is a bug that already shipped once. The bell was hidden with
+    the `hidden` class and shown by clearing the `hidden` property -- two
+    mechanisms for one job. The class is `display:none !important`, so the
+    property lost: the button sat in the DOM at zero width and could not be
+    clicked, on every first visit.
+
+    The browser tests above would not have caught a repeat. They measure the
+    rendered box, which is the right thing to assert about the product and the
+    wrong thing to assert about the cause: a second mechanism -- an inline
+    `style.display`, an attribute, a new class -- could produce the same broken
+    page while every one of them still passed. So the shape of the code is
+    checked here, separately, and cheaply: no server, no browser.
+    """
+
+    app_js = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    chat_html = (ROOT / "app" / "static" / "chat.html").read_text(encoding="utf-8")
+
+    @staticmethod
+    def _lines_mentioning(needle: str) -> list:
+        """Source lines containing `needle`, comments stripped.
+
+        Comments are removed first so the prose explaining this mechanism does
+        not count as a use of it -- and cannot satisfy the guard either.
+        """
+        out = []
+        for i, raw in enumerate(BellVisibilityTests.app_js.split("\n"), 1):
+            line = re.sub(r"/\*.*?\*/", "", raw)
+            line = re.sub(r"//.*$", "", line)
+            if needle in line:
+                out.append((i, line.strip()))
+        return out
+
+    def test_the_bell_is_toggled_in_exactly_one_place(self):
+        """One helper owns it. A second writer is the shape of the bug.
+
+        Every mutating call on the class list counts, not just `toggle`: a bare
+        `classList.remove('hidden')` next to the helper produces exactly the
+        same broken page, and a guard that only watched for `toggle` let one
+        through when it was first written.
+        """
+        writes = []
+        for i, line in self._lines_mentioning("notifBtn.classList"):
+            if any(call in line for call in ("add(", "remove(", "toggle(")):
+                writes.append((i, line))
+        self.assertTrue(writes,
+                        "the bell is no longer shown or hidden through "
+                        "showNotifBtn(); this guard has to follow the code")
+        self.assertEqual(1, len(writes),
+                         f"the bell's visibility is written in {len(writes)} "
+                         f"places, at lines {[w[0] for w in writes]}: "
+                         f"{[w[1] for w in writes]}. Only one should own it -- "
+                         "two mechanisms is how the bell ended up invisible but "
+                         "present.")
+
+    def test_the_bells_visibility_writes_all_live_in_the_helper(self):
+        """Not just the count: the single writer has to be inside
+        showNotifBtn(). An empty helper satisfies the count while the real
+        write sits beside it, which is the same split in a new place -- so the
+        write's location is checked, not only how many there are."""
+        helper = re.search(r"function showNotifBtn\(show\) \{(.*?)\n  \}",
+                           self.app_js, re.S)
+        self.assertIsNotNone(helper, "showNotifBtn() is gone")
+        # match.start() is a character offset; turn it into the line range the
+        # helper actually occupies, so the check below can tell its own body
+        # from everything else.
+        first = self.app_js.count("\n", 0, helper.start()) + 1
+        last = first + helper.group(0).count("\n")
+
+        self.assertRegex(
+            helper.group(1), r"notifBtn\.classList",
+            f"showNotifBtn() (lines {first}-{last}) no longer writes the "
+            "bell's classes, so whatever does is writing them from somewhere "
+            "else -- the split this class exists to prevent")
+
+        strays = [(i, line) for i, line in self._lines_mentioning("notifBtn")
+                  if "classList" in line and not (first <= i <= last)]
+        self.assertEqual(
+            [], strays,
+            f"the bell's classes are also written outside showNotifBtn() at "
+            f"{strays}")
+
+    def test_no_other_mechanism_hides_the_bell(self):
+        """The property, an inline style, or a second class all look fine and
+        all lose to `display:none !important` or bypass the helper."""
+        for prop in (".hidden =", ".style.display", ".style.visibility",
+                     ".hidden=", "setAttribute('hidden'", 'setAttribute("hidden"'):
+            with self.subTest(mechanism=prop):
+                offenders = [(i, l) for i, l in self._lines_mentioning(prop)
+                             if "notifBtn" in l or "notif-toggle" in l]
+                self.assertEqual(
+                    [], offenders,
+                    f"the bell is hidden through {prop} at line "
+                    f"{offenders[0][0] if offenders else '?'}, outside "
+                    "showNotifBtn(): {offenders}")
+
+    @staticmethod
+    def _helper_body() -> str:
+        m = re.search(r"function showNotifBtn\(show\) \{(.*?)\n  \}",
+                      BellVisibilityTests.app_js, re.S)
+        if m is None:
+            raise AssertionError(
+                "showNotifBtn() is gone; the visibility guards have to follow it")
+        return m.group(1)
+
+    def test_the_helper_shows_and_hides_through_the_class(self):
+        """The mechanism itself, so the guards above cannot be satisfied by a
+        rename that keeps the bug.
+
+        Symmetric on purpose. `classList.add('hidden')` alone would pass every
+        other guard in this class -- it is one write, it is inside the helper,
+        it touches the right class -- while leaving the bell permanently
+        invisible, because nothing anywhere would ever remove the class again.
+        Hiding and showing have to be the same call.
+        """
+        body = self._helper_body()
+        self.assertIn("classList", body,
+                      "showNotifBtn() must go through the class list")
+        self.assertIn("'hidden'", body,
+                      "showNotifBtn() must reference the `hidden` class")
+        self.assertIn("toggle(", body,
+                      "showNotifBtn() must both add and remove the class -- a "
+                      "write that only hides would leave the bell permanently "
+                      "invisible, and one that only shows would leave it "
+                      "permanently visible")
+        self.assertNotIn(".hidden =", body,
+                         "showNotifBtn() is setting the property again, which "
+                         "is the original bug in a new home")
+
+    def test_one_call_is_the_whole_of_showing_and_hiding(self):
+        """The helper's own body, reduced to its bell writes.
+
+        Read together with the symmetry check above this pins the whole
+        contract: exactly one write, inside this helper, and that write both
+        adds and removes. Between them a second mechanism has nowhere to enter.
+        """
+        writes = re.findall(
+            r"notifBtn\.classList\.(add|remove|toggle)\([^)]*\)",
+            self._helper_body())
+        self.assertEqual(["toggle"],
+                         writes,
+                         f"showNotifBtn() writes the bell's classes with "
+                         f"{writes}; it has to be a single toggle, so that one "
+                         "call both shows and hides")
+
+    def test_the_markup_hides_the_bell_and_the_class_is_the_mechanism(self):
+        """Both halves. The markup carries `hidden` so a browser without JS
+        never shows a dead control, and the class is what the code removes."""
+        tag = re.search(r'<button\b[^>]*\bid="notif-toggle"[^>]*>',
+                        self.chat_html)
+        self.assertIsNotNone(tag, "the bell is gone from the markup")
+        classes = re.search(r'class="([^"]*)"', tag.group(0)).group(1).split()
+        self.assertIn("hidden", classes,
+                      "the bell must ship with the class the code removes")
+        # And the class must be the display:none kind, not a custom one.
+        css = (ROOT / "app" / "static" / "style.css").read_text(encoding="utf-8")
+        rule = re.search(r"\.hidden\s*\{([^}]*)\}", css)
+        self.assertIsNotNone(rule, "there is no .hidden rule in the stylesheet")
+        self.assertIn("display", rule.group(1),
+                      ".hidden no longer sets display, so removing the class "
+                      "would not make anything visible")
+
+
 class NoBackgroundDeliveryTests(unittest.TestCase):
     """What this feature is not.
 
