@@ -273,7 +273,7 @@ def main() -> None:
     scheme = "https" if use_tls else "http"
     warn_insecure_startup(scheme)
     mode = f"{WORKERS} worker(s)" if WORKERS > 1 else "single process"
-    print(f"Chat app running at {scheme}://{HOST}:{PORT} [{mode}]", flush=True)
+    print(f"MChat running at {scheme}://{HOST}:{PORT} [{mode}]", flush=True)
     uvicorn.run(
         "app.main:app",
         host=HOST,

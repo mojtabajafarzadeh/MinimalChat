@@ -1,4 +1,4 @@
-# Minimal Chat
+# MChat
 
 A minimal real-time chat app: FastAPI + WebSocket + SQLite, vanilla JS frontend.
 Public chat room plus private direct messages.
@@ -695,15 +695,15 @@ left untouched — no data is destroyed.
 `packaging/build.py` vendors all Python dependencies into the bundle:
 
 ```bash
-python3 packaging/build.py   # -> dist/chat-app-linux-x86_64.tar.gz (~8 MB)
+python3 packaging/build.py   # -> dist/mchat-linux-x86_64.tar.gz (~8 MB)
 ```
 
 The tarball runs on any Linux x86_64 with stock Python 3.12 — no pip,
 no internet, no system changes:
 
 ```bash
-tar -xzf dist/chat-app-linux-x86_64.tar.gz
-cd chat-app && ./chat-app    # data goes to ./data (override: CHAT_DATA_DIR)
+tar -xzf dist/mchat-linux-x86_64.tar.gz
+cd mchat && ./mchat    # data goes to ./data (override: CHAT_DATA_DIR)
 ./install.sh                 # optional: install to ~/.local/{bin,share}
 ```
 

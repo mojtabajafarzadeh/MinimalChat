@@ -36,7 +36,7 @@
   // sent to the server and the decision survives only as long as this tab
   // plus the one localStorage key below.
   let wantNotifications = false;
-  const BASE_TITLE = 'Chat room \u2014 Minimal Chat';
+  const BASE_TITLE = 'Chat room \u2014 MChat';
   // conversation key -> {button, badge, label}, so a badge update never
   // rebuilds the list and never steals focus from someone tabbing through it.
   let convRows = Object.create(null);

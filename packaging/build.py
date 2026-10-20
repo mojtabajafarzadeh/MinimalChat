@@ -1,9 +1,9 @@
 """Build the offline Linux bundle.
 
 Copies the exact installed dependency closure (fastapi, uvicorn,
-cryptography, ...) from the current interpreter into chat-app/lib/,
+cryptography, ...) from the current interpreter into mchat/lib/,
 plus the app source and launcher scripts, then packs it as
-dist/chat-app-linux-x86_64.tar.gz.
+dist/mchat-linux-x86_64.tar.gz.
 
 Usage:  python3 packaging/build.py
 
@@ -25,7 +25,7 @@ import tarfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-STAGE = ROOT / "dist" / "chat-app"
+STAGE = ROOT / "dist" / "mchat"
 TEMPLATES = ROOT / "packaging" / "templates"
 
 TOP_LEVEL_DISTS = ["fastapi", "uvicorn", "cryptography", "websockets"]
@@ -247,15 +247,15 @@ def main() -> None:
                     ignore=shutil.ignore_patterns("__pycache__"))
     for f in ["run.py", "requirements.txt"]:
         shutil.copy2(ROOT / f, STAGE / f)
-    for f in ["chat-app", "install.sh", "README.txt"]:
+    for f in ["mchat", "install.sh", "README.txt"]:
         shutil.copy2(TEMPLATES / f, STAGE / f)
-    for exe in [STAGE / "chat-app", STAGE / "install.sh"]:
+    for exe in [STAGE / "mchat", STAGE / "install.sh"]:
         exe.chmod(exe.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
-    out = ROOT / "dist" / "chat-app-linux-x86_64.tar.gz"
+    out = ROOT / "dist" / "mchat-linux-x86_64.tar.gz"
     print(f"Packing {out} ...")
     with tarfile.open(out, "w:gz") as tar:
-        tar.add(STAGE, arcname="chat-app")
+        tar.add(STAGE, arcname="mchat")
     size_mb = out.stat().st_size / 1e6
     n_files = sum(1 for _ in STAGE.rglob("*") if _.is_file())
     print(f"Done: {out} ({size_mb:.1f} MB, {n_files} files)")

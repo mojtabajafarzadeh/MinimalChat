@@ -62,7 +62,7 @@ jobs:
       - name: Verify the offline bundle still builds
         run: |
           python packaging/build.py
-          test -f dist/chat-app-linux-x86_64.tar.gz
+          test -f dist/mchat-linux-x86_64.tar.gz
           echo "bundle OK"
 
       - name: Check nothing sensitive is tracked

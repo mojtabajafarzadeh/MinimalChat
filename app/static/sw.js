@@ -1,4 +1,4 @@
-/* Minimal Chat service worker -- deliberately almost empty.
+/* MChat service worker -- deliberately almost empty.
  *
  * Its only job is to make the app installable: a registered service worker with
  * a fetch handler is what Chrome requires before it will offer "Install", and

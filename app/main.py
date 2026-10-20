@@ -93,7 +93,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Minimal Chat", lifespan=lifespan)
+app = FastAPI(title="MChat", lifespan=lifespan)
 # Middleware runs bottom-up: the LAST one added is the outermost. So the header
 # middleware goes on second, outside the channel gate -- otherwise the gate's
 # 403 (the answer to every cookie-auth /api call while the channel is on) would

@@ -1,6 +1,6 @@
 {
-  "name": "Minimal Chat",
-  "short_name": "Chat",
+  "name": "MChat",
+  "short_name": "M",
   "description": "A small self-hosted chat: public room and private messages.",
   "start_url": "/",
   "scope": "/",

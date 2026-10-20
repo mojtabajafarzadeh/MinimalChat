@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launcher for the offline chat-app bundle. No pip / internet needed.
+# Launcher for the offline mchat bundle. No pip / internet needed.
 # Only requirement: Linux x86_64 with python3.12 on PATH.
 set -euo pipefail
 

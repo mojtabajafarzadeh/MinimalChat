@@ -1,5 +1,5 @@
-برنامه چت (نسخه آفلاین لینوکس)
-==============================
+MChat (نسخه آفلاین لینوکس)
+==========================
 
 این پکیج همه کتابخانه‌های لازم را داخل خودش دارد.
 روی سیستم مقصد به اینترنت و نصب هیچ کتابخانه‌ای با pip نیاز نیست.
@@ -10,17 +10,17 @@
 
 اجرای سریع
 ----------
-  tar -xzf chat-app-linux-x86_64.tar.gz
-  cd chat-app
-  ./chat-app
+  tar -xzf mchat-linux-x86_64.tar.gz
+  cd mchat
+  ./mchat
 
 بعد مرورگر را باز کنید: http://127.0.0.1:8001
-(با متغیر PORT می‌توانید پورت را عوض کنید: PORT=8002 ./chat-app)
+(با متغیر PORT می‌توانید پورت را عوض کنید: PORT=8002 ./mchat)
 
 نصب دائمی (اختیاری)
 -------------------
   ./install.sh
-  chat-app
+  mchat
 
 داده‌ها کجا ذخیره می‌شوند؟
 --------------------------
@@ -35,19 +35,19 @@ CHAT_DATA_DIR و CHAT_ENCRYPTION_KEY.
 هشدار مهم: اگر فایل .chat_secret پاک شود، پیام‌های ذخیره‌شده
 برای همیشه غیرقابل خواندن می‌شوند. از آن بکاپ بگیرید.
 
-CHAT APP (offline Linux bundle)
-===============================
+MCHAT (offline Linux bundle)
+==========================
 Self-contained: all Python libraries are vendored inside lib/.
 No pip installs, no internet needed on the target machine.
 
 Only requirement: Linux x86_64 + stock Python 3.12 (no packages).
 
 Quick start:
-  tar -xzf chat-app-linux-x86_64.tar.gz
-  cd chat-app
-  ./chat-app        # then open http://127.0.0.1:8001
+  tar -xzf mchat-linux-x86_64.tar.gz
+  cd mchat
+  ./mchat        # then open http://127.0.0.1:8001
 
-Optional install: ./install.sh   -> then run: chat-app
+Optional install: ./install.sh   -> then run: mchat
 Data (chat.db + .chat_secret) is created in ./data next to the bundle
 (override with CHAT_DATA_DIR). Back up .chat_secret: losing it makes
 stored messages permanently unreadable.

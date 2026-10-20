@@ -186,7 +186,7 @@ class BuildWithoutPackagingTests(unittest.TestCase):
             self.assertIn("Done:", proc.stdout)
             # The isolated import check must have run and passed.
             self.assertIn("bundled imports OK", proc.stdout)
-            bundle = ROOT / "dist" / "chat-app-linux-x86_64.tar.gz"
+            bundle = ROOT / "dist" / "mchat-linux-x86_64.tar.gz"
             self.assertTrue(bundle.exists())
             self.assertGreater(bundle.stat().st_size, 1_000_000)
 
@@ -197,7 +197,7 @@ class BuildWithoutPackagingTests(unittest.TestCase):
         and unconditionally by fastapi; if the resolver loses a dependency the
         bundle still builds, so assert the file is actually in it.
         """
-        stage = ROOT / "dist" / "chat-app" / "lib"
+        stage = ROOT / "dist" / "mchat" / "lib"
         self.assertTrue(stage.is_dir(), "run the build first")
         self.assertTrue(
             (stage / "typing_extensions.py").is_file()
