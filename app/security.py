@@ -285,6 +285,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "style-src 'self' 'unsafe-inline'",
             "img-src 'self' data:",
             "font-src 'self'",
+            # The service worker is same-origin and does nothing but claim
+            # clients. Stating it here means the worker stays same-origin
+            # even if default-src is ever widened, and it documents that the
+            # worker is allowed at all.
+            "worker-src 'self'",
         ]
         # connect-src is built from the Host the client reached. An absent or
         # unusable Host yields NO connect-src at all, and with no directive

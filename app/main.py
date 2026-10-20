@@ -371,6 +371,45 @@ def chat_page(request: Request):
     return page("chat.html")
 
 
+@app.get("/sw.js")
+def service_worker():
+    """The service worker, at the root.
+
+    At the root rather than under /static/ because its scope has to cover the
+    whole app: a worker served from /static/sw.js can only control /static/,
+    and a worker whose scope does not include the page it was registered from
+    will not register at all. The rule is simple and absolute -- a service
+    worker's scope is limited to the directory it is served from.
+
+    The file is read fresh on every request rather than mounted, so a
+    deployment that replaces it does not leave a stale worker in place.
+
+    Cache-Control matters: the browser compares the fetched worker byte for
+    byte with the installed one, and only installs the new one if it differs.
+    With a long-lived cache the update would never arrive.
+    """
+    text = (STATIC_DIR / "sw.js").read_text(encoding="utf-8")
+    return Response(
+        content=text,
+        media_type="application/javascript; charset=utf-8",
+        headers={"Cache-Control": "no-cache",
+                 "Service-Worker-Allowed": "/"},
+    )
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    """The web app manifest, at the root.
+
+    The root path is the conventional one and what browsers look for; the
+    file also lives under /static/ for anyone who links it directly. Served
+    with the manifest media type, which Python's own mimetypes knows even
+    without /etc/mime.types -- so a minimal container still serves it right.
+    """
+    text = (STATIC_DIR / "manifest.webmanifest").read_text(encoding="utf-8")
+    return Response(content=text, media_type="application/manifest+json")
+
+
 # ---------- API ----------
 
 

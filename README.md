@@ -555,6 +555,39 @@ Verified in a real browser against a real WebSocket in
 to check the text and tag, since a headless browser emits no observable event
 for a notification at all.
 
+## Installing it as an app
+
+The app is installable: Chrome offers "Install" in the address bar, and iOS
+offers "Add to Home Screen" from the share sheet. The installed copy launches
+without browser chrome, with its own icon, and — on a phone — takes the whole
+screen.
+
+**It needs HTTPS.** A service worker can only be registered in a secure
+context, so on plain HTTP over a network address there is nothing to install
+and no prompt appears. `localhost` counts as secure, so a laptop install works
+over plain HTTP.
+
+### What "installable" does and does not mean
+
+It means the app can be installed and launched. It does **not** mean:
+
+- **offline.** The service worker caches nothing, so a cold start with no
+  network shows a connection error rather than your last messages. That is
+  deliberate: the channel keys live in the page's `sessionStorage`, which a
+  service worker cannot read, so a cached response would be ciphertext with no
+  key beside it — useless — while the message bodies would sit on disk in the
+  browser's cache storage regardless.
+- **push notifications.** No push service is involved, so the app cannot wake
+  you when a message arrives while it is closed. The in-app notifications work
+  as described above, while the tab is open.
+
+Both of those are the same ceiling from two directions: background delivery
+would mean moving message content, or the keys beside it, out of the page.
+
+Verified against Chrome's own installability verdict — not an interpretation of
+the manifest — in `tests/test_pwa.py`, which also pins the ceiling above so it
+has to be undone on purpose.
+
 ## Features
 
 - Registration / login / logout (PBKDF2 password hashing, server sessions)
@@ -570,6 +603,9 @@ for a notification at all.
 - Presence: a dot beside each conversation marks who is currently connected.
   It is per-process, so it is only reported when `WORKERS=1` (the default) —
   with several workers a user on another worker would look offline.
+- Installable: a web app manifest, icons and a service worker that caches
+  nothing, so the app can be added to the home screen and launched without
+  browser chrome. See "Installing it as an app" above.
 - Desktop notifications for messages in conversations you are not viewing,
   and an unread count in the tab title. Neither carries message text; see
   "Desktop notifications" above for what that feature deliberately cannot do.
