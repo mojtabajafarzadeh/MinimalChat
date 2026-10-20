@@ -56,6 +56,11 @@ def get_session_user(token: str | None):
     is exactly what a stolen session looks like, and without an idle bound
     there is no server-side signal at all (A-03).
 
+    `SESSION_IDLE_DAYS=0` disables the idle check, as documented. That is
+    written as `SESSION_IDLE_DAYS and ...` rather than folded into the
+    comparison: `idle_seconds > 0 * 86400` is true for every session more than
+    a second old, which is the exact opposite of "disabled".
+
     Touching last_seen on every read is one UPDATE per authenticated request.
     That is not free, so it only happens once the recorded value is older than
     a minute -- a session is not idle if it was used a moment ago, and the
@@ -63,21 +68,33 @@ def get_session_user(token: str | None):
     """
     if not token:
         return None
+    # The row is fetched without the expiry filters so the two cases can be
+    # told apart afterwards: a session that exists and has died is deleted, an
+    # unknown token is not. Deleting unconditionally turned every request
+    # carrying a random cookie into a write, and this app has one SQLite
+    # writer -- an attacker could keep it busy for free.
     row = db.query_one(
         "SELECT u.id, u.name, u.username, "
         "       CAST(strftime('%s','now') AS INTEGER) "
         "         - CAST(strftime('%s', COALESCE(s.last_seen, s.created_at)) "
-        "               AS INTEGER) AS idle_seconds "
-        "FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ? "
-        "AND datetime(s.created_at) > datetime('now', ?)",
-        (token, f"-{SESSION_LIFETIME_DAYS} days"),
+        "               AS INTEGER) AS idle_seconds, "
+        "       CAST(strftime('%s','now') AS INTEGER) "
+        "         - CAST(strftime('%s', s.created_at) "
+        "               AS INTEGER) AS age_seconds "
+        "FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?",
+        (token,),
     )
     if not row:
-        # Unknown or past the absolute lifetime: drop the dead row.
+        return None
+
+    if row["age_seconds"] is not None and \
+            row["age_seconds"] > SESSION_LIFETIME_DAYS * 86400:
+        # Past the absolute lifetime: this row is genuinely dead, so reclaim it.
         db.execute("DELETE FROM sessions WHERE id = ?", (token,))
         return None
 
-    if row["idle_seconds"] is not None and row["idle_seconds"] > SESSION_IDLE_DAYS * 86400:
+    if SESSION_IDLE_DAYS and row["idle_seconds"] is not None \
+            and row["idle_seconds"] > SESSION_IDLE_DAYS * 86400:
         db.execute("DELETE FROM sessions WHERE id = ?", (token,))
         return None
 
@@ -106,11 +123,16 @@ def purge_expired_sessions() -> int:
     hands back lastrowid, which for a DELETE is meaningless.
     """
     before = db.query_one("SELECT COUNT(*) AS n FROM sessions")["n"]
-    db.execute(
-        "DELETE FROM sessions "
-        "WHERE datetime(created_at) <= datetime('now', ?) "
-        "OR datetime(COALESCE(last_seen, created_at)) <= datetime('now', ?)",
-        (f"-{SESSION_LIFETIME_DAYS} days", f"-{SESSION_IDLE_DAYS} days"),
-    )
+    sql = ("DELETE FROM sessions "
+           "WHERE datetime(created_at) <= datetime('now', ?)")
+    params = [f"-{SESSION_LIFETIME_DAYS} days"]
+    # The idle clause is added only when the idle check is enabled. With
+    # SESSION_IDLE_DAYS=0 the bound is "now", which would delete every session
+    # in the table -- the opposite of the documented "0 disables it".
+    if SESSION_IDLE_DAYS:
+        sql += (" OR datetime(COALESCE(last_seen, created_at)) "
+                "<= datetime('now', ?)")
+        params.append(f"-{SESSION_IDLE_DAYS} days")
+    db.execute(sql, tuple(params))
     after = db.query_one("SELECT COUNT(*) AS n FROM sessions")["n"]
     return max(0, before - after)

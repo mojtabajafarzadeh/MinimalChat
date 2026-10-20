@@ -7,6 +7,22 @@ SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEST="${1:-$HOME/.local/share/chat-app}"
 BIN_DIR="$HOME/.local/bin"
 
+# Refuse the destinations where a recursive delete is a disaster rather than a
+# reinstall. This argument is operator input, and "install over my home
+# directory" must not be a thing this script can be talked into doing.
+case "$DEST" in
+  ""|"/"|"$HOME"|"$HOME/")
+    echo "refusing to install over $DEST" >&2
+    exit 1
+    ;;
+esac
+# Only replace a directory that looks like a previous install, or one that does
+# not exist yet. Anything else is a typo worth stopping for.
+if [ -e "$DEST" ] && [ ! -e "$DEST/chat-app" ] && [ ! -e "$DEST/run.py" ]; then
+  echo "refusing: $DEST exists and does not look like a chat-app install" >&2
+  exit 1
+fi
+
 mkdir -p "$BIN_DIR"
 rm -rf "$DEST"
 mkdir -p "$DEST"

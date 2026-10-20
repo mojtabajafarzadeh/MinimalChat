@@ -43,6 +43,7 @@ priority is defaults < `.env` file < real environment variables.
 | `ADMIN_PATH` | `/admin` | Address of the admin panel (letters, numbers, `_`, `-`) |
 | `ADMIN_PASSWORD` | empty (disabled) | Admin panel password. Empty = panel routes are 404. Use a long random value |
 | `ADMIN_PASSWORD_HASH` | empty | PBKDF2 hash of the admin password, preferred over the plaintext above. Wins when both are set |
+| `ADMIN_ALLOW_PLAINTEXT` | `false` | Accept serving the admin panel over plain HTTP on a non-loopback address. Startup refuses that combination otherwise, because the panel posts its password outside the encrypted channel |
 | `ENC_ENABLED` | `true` | Application-layer encrypted transport (TLS alternative) |
 | `ENC_SHOW_FINGERPRINT` | `true` | Show/pin the server key fingerprint (the anti-MITM check) |
 | `WORKERS` | `1` | Worker processes. `>1` shares one SQLite database in WAL mode, see below |
@@ -265,9 +266,11 @@ or key rotation).
 - Channel keys live in `sessionStorage`, so a script-injection attacker in
   the origin could read them — the same exposure model as any cookie-based
   app, but now the keys matter more. Keep output escaped (as it is).
-- The **admin panel still posts its password over the channel-less path**.
-  Put the app behind a tunnel (WireGuard) or TLS if you use the admin panel
-  on an untrusted network.
+- The **admin panel still posts its password over the channel-less path**, so
+  it cannot rely on the encrypted channel. That is why `run.py` refuses to
+  start when the panel is enabled on a plain-HTTP, non-loopback address: bind
+  to loopback behind a tunnel, configure TLS, or accept it deliberately with
+  `ADMIN_ALLOW_PLAINTEXT=true`.
 - Set `ENC_ENABLED=false` to fall back to plain HTTP. With TLS configured you
   can keep either mode; TLS remains the better choice when available.
 
@@ -312,6 +315,11 @@ replaces a stale pin, so a rotated key, a pin pasted from the wrong server, and
 a plain re-pin are all one step — and a permanent one-click way to drop a
 verified pin would be a quiet downgrade to trust-on-first-use with nothing to
 buy in exchange.
+
+Logging out clears the tab's channel session but keeps the pin, for the same
+reason: the pin is this browser's knowledge of the server's identity, not part
+of the login, and dropping it on logout would hand a shared machine a
+one-click way to forget what it had verified.
 
 The trust-on-first-use pin still happens automatically, so the panel is an
 addition to the MITM check rather than a replacement for it. Note the limit of
@@ -424,6 +432,19 @@ configured password is shorter than 12 characters or is a single character
 class, and tells you what to do about it; the check is skipped for the hash
 form because a hash hides the length. The warning is advisory, not a refusal:
 `python run.py` starts either way.
+
+### The panel is not on the encrypted channel
+
+`admin.html` loads no channel code: the panel authenticates with its own
+`HttpOnly` cookie and posts the password over ordinary HTTP. That is a
+deliberate simplification, and it has a consequence the encrypted transport
+cannot paper over — on a plain-HTTP interface that other machines can reach,
+the one credential guarding every user and message would cross the network in
+cleartext. So startup refuses exactly that combination. It accepts the panel
+when the listener is loopback (nothing leaves the machine — put a tunnel or a
+TLS terminator in front), when TLS is configured, or when
+`ADMIN_ALLOW_PLAINTEXT=true` says the exposure was chosen. The refusal happens
+before a port is bound, and it names the three ways out.
 
 ### Brute-force protection
 

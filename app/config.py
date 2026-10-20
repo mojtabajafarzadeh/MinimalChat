@@ -71,6 +71,9 @@ def _get_port() -> int:
 
 
 HOST = get("HOST", "127.0.0.1")
+# Addresses where "plain HTTP" means "this machine only": nothing leaves the
+# box, so a cleartext credential on the wire is not exposed to a network.
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 PORT = _get_port()
 REGISTRATION_ENABLED = _parse_bool(get("REGISTRATION_ENABLED", "true"), True)
 
@@ -215,3 +218,9 @@ ADMIN_PASSWORD = get("ADMIN_PASSWORD", "")
 # Set it alongside ADMIN_PASSWORD (or on its own -- a hash alone is enough to
 # authenticate). When present it wins, and ADMIN_PASSWORD is never compared.
 ADMIN_PASSWORD_HASH = get("ADMIN_PASSWORD_HASH", "")
+# The panel keeps its own cookie session and admin.html loads no channel code,
+# so its password is posted OUTSIDE the encrypted channel. On loopback (or
+# behind TLS) that is fine; on a plain-HTTP interface other machines can reach,
+# the one credential guarding every user and message crosses the network in
+# cleartext. Startup refuses that combination; this flag accepts it on purpose.
+ADMIN_ALLOW_PLAINTEXT = _parse_bool(get("ADMIN_ALLOW_PLAINTEXT", "false"), False)

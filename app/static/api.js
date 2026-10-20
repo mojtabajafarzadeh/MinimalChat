@@ -123,6 +123,11 @@ var Api = (function () {
 
   function reportIdentityChange(err) {
     state.identityChanged = true;
+    // Fail closed. `boot()` deliberately resolves so the panel can show the
+    // new fingerprint, but resolving with the default mode would leave the
+    // page on the PLAIN transport -- and a login typed into it is a password
+    // on the wire in cleartext, which is the one thing the identity check
+    // exists to prevent. 'blocked' makes every entry point below refuse.
     // The handshake threw, so the success path never fired. Say so anyway: the
     // identity panel has to show the new fingerprint and flag the stale pin.
     notifyIdentity();
@@ -131,6 +136,21 @@ var Api = (function () {
       'someone is impersonating the server. Stop and verify before continuing.' +
       (err && err.message ? ' (' + err.message.slice(0, 120) + ')' : ''),
       trustNewIdentity);
+    state.mode = 'blocked';
+  }
+
+  /* ---------- fail closed ---------- */
+
+  function blocked() {
+    return state.mode === 'blocked';
+  }
+
+  // Shared message: what is wrong and what the reader can do about it. The
+  // request never leaves the browser, so this is the whole of the feedback.
+  function blockedError() {
+    return new Error('The server identity is unverified, so nothing was sent. ' +
+      'Compare the fingerprint with the value printed on the server, then use ' +
+      '"I verified it - trust and reload" before signing in.');
   }
 
   function trustNewIdentity() {
@@ -182,6 +202,7 @@ var Api = (function () {
   /* ---------- auth ---------- */
 
   function me() {
+    if (blocked()) return Promise.reject(blockedError());
     if (state.mode === 'enc') {
       return enc().then(function (c) { return c.call('/api/me', {}); });
     }
@@ -189,6 +210,7 @@ var Api = (function () {
   }
 
   function login(username, password) {
+    if (blocked()) return Promise.reject(blockedError());
     if (state.mode === 'enc') {
       return enc().then(function (c) {
         return c.login(username, password).then(function (data) {
@@ -202,6 +224,7 @@ var Api = (function () {
   }
 
   function register(name, username, password, confirm) {
+    if (blocked()) return Promise.reject(blockedError());
     if (state.mode === 'enc') {
       return enc().then(function (c) {
         return c.call('/api/register', { name: name, username: username,
@@ -218,14 +241,20 @@ var Api = (function () {
           .catch(function () {})
       : plainPost('/api/logout', {}).catch(function () {});
     return done.then(function () {
+      // The channel state is per tab and dies with the session; the PIN is
+      // not. It records what this browser believes the server's identity to
+      // be, so dropping it on logout would be the one-click downgrade to
+      // trust-on-first-use the identity panel deliberately refuses to offer --
+      // and it would happen silently, on a shared machine, right before the
+      // next person signs in.
       Enc.clearState();
-      Enc.clearPin();
     });
   }
 
   /* ---------- data ---------- */
 
   function messages(limit) {
+    if (blocked()) return Promise.reject(blockedError());
     if (state.mode === 'enc') {
       return enc().then(function (c) {
         return c.call('/api/messages', { q: { limit: limit || 50 } });
@@ -235,6 +264,7 @@ var Api = (function () {
   }
 
   function conversations() {
+    if (blocked()) return Promise.reject(blockedError());
     if (state.mode === 'enc') {
       return enc().then(function (c) { return c.call('/api/conversations', {}); });
     }
@@ -242,6 +272,7 @@ var Api = (function () {
   }
 
   function users(q, limit) {
+    if (blocked()) return Promise.reject(blockedError());
     if (state.mode === 'enc') {
       return enc().then(function (c) {
         return c.call('/api/users', { q: { q: q || '', limit: limit || 20 } });
@@ -253,6 +284,7 @@ var Api = (function () {
 
   function dmHistory(username, limit) {
     var path = '/api/dm/' + encodeURIComponent(username);
+    if (blocked()) return Promise.reject(blockedError());
     if (state.mode === 'enc') {
       return enc().then(function (c) {
         return c.call(path, { q: { limit: limit || 50 } });
@@ -265,6 +297,17 @@ var Api = (function () {
 
   /* onFrame(decodedAppObject) */
   function openSocket(onFrame, onStatus) {
+    // No channel, no socket: the plain WebSocket is refused by the server
+    // whenever the channel is on, and opening one here would only produce a
+    // reconnect loop against a transport this page must not use.
+    if (blocked()) {
+      if (onStatus) onStatus('rejected', 'The server identity is unverified.');
+      return {
+        send: function () { return Promise.reject(blockedError()); },
+        close: function () {},
+        isOpen: function () { return false; },
+      };
+    }
     var url;
     if (state.mode === 'enc') {
       var proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -388,9 +431,14 @@ var Api = (function () {
     // Identity has been verified; clear the changed flag so the panel doesn't
     // auto-open on every subsequent chat:identity event.
     state.identityChanged = false;
-    return { ok: true, live: live, pinned: normalized,
-             message: 'Verified and pinned. This browser will now refuse to ' +
-                      'connect if the server identity ever changes.' };
+    var message = 'Verified and pinned. This browser will now refuse to ' +
+                  'connect if the server identity ever changes.';
+    if (blocked()) {
+      // This page never established a channel -- the handshake was rejected --
+      // so pinning alone does not make it usable again.
+      message += ' Reload the page to connect.';
+    }
+    return { ok: true, live: live, pinned: normalized, message: message };
   }
 
   function clearPin() {

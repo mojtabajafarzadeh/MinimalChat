@@ -173,6 +173,52 @@ class MigrationTests(SessionTestBase):
         self.assertIn("created_at", cols)
 
 
+class ZeroIdleDaysTests(SessionTestBase):
+    """SESSION_IDLE_DAYS=0 disables the idle bound; it does not invert it.
+
+    The bound used to be folded into one comparison, `idle_seconds > 0 * 86400`,
+    which is true for every session more than a second old -- so the documented
+    "off" switch logged people out on their second request instead.
+    """
+
+    def setUp(self):
+        os.environ["SESSION_IDLE_DAYS"] = "0"
+        super().setUp()
+
+    def tearDown(self):
+        super().tearDown()
+        os.environ.pop("SESSION_IDLE_DAYS", None)
+        self._reload()
+
+    def test_the_setting_really_is_zero(self):
+        self.assertEqual(self.config.SESSION_IDLE_DAYS, 0)
+
+    def test_a_long_idle_session_stays_valid(self):
+        token = self.auth.create_session(self.user_id)
+        self._age(token, last_seen=400)
+        self.assertIsNotNone(
+            self.auth.get_session_user(token),
+            "SESSION_IDLE_DAYS=0 threw away a session it was told to ignore")
+        self.assertIsNotNone(
+            self.db.query_one("SELECT id FROM sessions WHERE id = ?", (token,)),
+            "the session row was deleted even though the idle check is off")
+
+    def test_the_absolute_lifetime_is_still_enforced(self):
+        token = self.auth.create_session(self.user_id)
+        self._age(token, created_at=45, last_seen=0)
+        self.assertIsNone(
+            self.auth.get_session_user(token),
+            "turning the idle check off must not disable the absolute lifetime")
+
+    def test_the_startup_purge_keeps_sessions(self):
+        token = self.auth.create_session(self.user_id)
+        self._age(token, last_seen=400)
+        self.auth.purge_expired_sessions()
+        self.assertIsNotNone(
+            self.db.query_one("SELECT id FROM sessions WHERE id = ?", (token,)),
+            "the startup purge deleted sessions with the idle check off")
+
+
 class ConfigTests(unittest.TestCase):
     def test_the_idle_bound_is_configurable(self):
         importlib.reload(importlib.import_module("app.config"))
@@ -188,7 +234,10 @@ class ConfigTests(unittest.TestCase):
                 os.environ["SESSION_IDLE_DAYS"] = saved
             importlib.reload(importlib.import_module("app.config"))
 
-    def test_zero_disables_the_check(self):
+    def test_zero_parses_as_zero(self):
+        """Only the parsing is checked here; ZeroIdleDaysTests owns the
+        behaviour, because "0 means off" is a claim about queries, not about
+        the config module."""
         saved = os.environ.get("SESSION_IDLE_DAYS")
         try:
             os.environ["SESSION_IDLE_DAYS"] = "0"

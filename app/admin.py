@@ -75,6 +75,39 @@ def verify_password(password: str) -> bool:
     return False
 
 
+def plaintext_refusal() -> str | None:
+    """Why the panel must not be served in this configuration, or None.
+
+    The admin password is the single credential that guards every user and
+    every message in the database, and the panel posts it outside the encrypted
+    channel: admin.html loads no channel code by design (see README). On
+    loopback the password never leaves the machine, and with TLS the hop is
+    encrypted, so both are allowed. A plain-HTTP interface that other machines
+    can reach is a cleartext password on the wire, so that combination is
+    refused unless it was chosen explicitly.
+    """
+    if not enabled():
+        return None
+    from . import config          # read at call time, so tests can patch it
+    if config.ADMIN_ALLOW_PLAINTEXT:
+        return None
+    if config.SSL_CERTFILE and config.SSL_KEYFILE:
+        return None
+    if config.HOST in config.LOOPBACK_HOSTS:
+        return None
+    return (
+        f"The admin panel is enabled, but this server serves plain HTTP on "
+        f"{config.HOST} and the panel posts its password outside the encrypted "
+        "channel (admin.html loads no channel code), so that password would "
+        "cross the network in cleartext.\n"
+        "Fix one of these:\n"
+        "  - configure SSL_CERTFILE/SSL_KEYFILE, or terminate TLS in a proxy;\n"
+        "  - bind to loopback (HOST=127.0.0.1) and reach it over a tunnel;\n"
+        "  - set ADMIN_ALLOW_PLAINTEXT=true if you accept the exposure.\n"
+        "Clear ADMIN_PASSWORD/ADMIN_PASSWORD_HASH instead to disable the panel."
+    )
+
+
 def create_session() -> str:
     token = secrets.token_hex(32)
     db.execute("INSERT INTO admin_sessions (id, expires_at) VALUES (?, "
@@ -83,18 +116,28 @@ def create_session() -> str:
 
 
 def valid_session(token: str | None) -> bool:
+    """Is this admin session live?
+
+    The row is looked up by id alone and the expiry is judged here, so an
+    unknown token and a dead one are distinguishable. Only the dead one is
+    deleted: an unconditional DELETE on every miss turned each request carrying
+    a random cookie into a write, and the app has a single SQLite writer.
+    """
     if not token:
         return False
     row = db.query_one(
-        "SELECT 1 FROM admin_sessions WHERE id = ? "
-        "AND datetime(expires_at) > datetime('now')",
+        "SELECT CAST(strftime('%s','now') AS INTEGER) "
+        "         - CAST(strftime('%s', expires_at) AS INTEGER) AS overdue "
+        "FROM admin_sessions WHERE id = ?",
         (token,),
     )
-    if row:
-        return True
-    # Unknown or expired: drop it so the table cannot grow without bound.
-    db.execute("DELETE FROM admin_sessions WHERE id = ?", (token,))
-    return False
+    if not row:
+        return False
+    if row["overdue"] is not None and row["overdue"] >= 0:
+        # Expired: this row is genuinely dead, so reclaim it.
+        db.execute("DELETE FROM admin_sessions WHERE id = ?", (token,))
+        return False
+    return True
 
 
 def delete_session(token: str | None) -> None:

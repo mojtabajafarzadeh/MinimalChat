@@ -22,18 +22,21 @@
 <body>
 <button class="btn btn-secondary btn-icon theme-float" data-theme-toggle type="button" aria-label="Toggle dark mode">🌙</button>
 <div class="center">
-  <form class="card" id="form">
-    <h1>Welcome back</h1>
-    <p class="sub">Log in to join the chat.</p>
-    <label class="label" for="username">Username</label>
-    <input class="input" id="username" type="text" autocomplete="username" maxlength="32" required>
-    <label class="label" for="password">Password</label>
-    <input class="input" id="password" type="password" autocomplete="current-password" maxlength="128" required>
-    <div class="alert alert-destructive hidden" id="error" role="alert"></div>
-    <button class="btn btn-block" type="submit">Log in</button>
-    <p class="switch" id="register-link">No account? <a href="/register">Register</a></p>
+  <div class="auth-stack">
+    <form class="card" id="form">
+      <h1>Welcome back</h1>
+      <p class="sub">Log in to join the chat.</p>
+      <label class="label" for="username">Username</label>
+      <input class="input" id="username" type="text" autocomplete="username" maxlength="32" required>
+      <label class="label" for="password">Password</label>
+      <input class="input" id="password" type="password" autocomplete="current-password" maxlength="128" required>
+      <div class="alert alert-destructive hidden" id="error" role="alert"></div>
+      <button class="btn btn-block" type="submit">Log in</button>
+      <p class="switch" id="register-link">No account? <a href="/register">Register</a></p>
+    </form>
+    <!-- A sibling of the form, never a child; see .auth-stack in style.css. -->
     <div id="identity-panel"></div>
-  </form>
+  </div>
 </div>
 </body>
 </html>

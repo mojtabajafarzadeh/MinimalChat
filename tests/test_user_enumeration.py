@@ -242,5 +242,40 @@ class EnumerationTests(unittest.TestCase):
         self.assertNotIn(self.users["carol"], found)
 
 
+class UsernameValidationTests(unittest.TestCase):
+    """Usernames are ASCII, so two accounts cannot look identical.
+
+    `str.isalnum()` is Unicode-aware: it accepted U+0430 CYRILLIC SMALL LETTER A,
+    which renders exactly like the Latin "a". A chat that identifies people by
+    @username cannot afford two identities that look the same, so the ASCII
+    restriction is part of the rule rather than a nicety.
+    """
+
+    @staticmethod
+    def _valid(name):
+        from app.main import valid_username
+        return valid_username(name)
+
+    def test_plain_ascii_names_are_accepted(self):
+        for name in ("alice", "a_b-c", "user123", "x" * 32):
+            with self.subTest(name=name):
+                self.assertTrue(self._valid(name), f"{name!r} was rejected")
+
+    def test_a_cyrillic_homograph_is_rejected(self):
+        self.assertFalse(
+            self._valid("\u0430dmin"),
+            "a Cyrillic 'a' is accepted, so @\u0430dmin can impersonate @admin")
+
+    def test_other_non_ascii_letters_are_rejected(self):
+        for name in ("b\u00f6b", "\u03b1lpha", "na\u00efve"):
+            with self.subTest(name=name):
+                self.assertFalse(self._valid(name), f"{name!r} was accepted")
+
+    def test_the_length_and_charset_limits_still_hold(self):
+        for name in ("ab", "a" * 33, "has space", "per%cent", "a.b"):
+            with self.subTest(name=name):
+                self.assertFalse(self._valid(name), f"{name!r} was accepted")
+
+
 if __name__ == "__main__":
     unittest.main()

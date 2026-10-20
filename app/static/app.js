@@ -19,6 +19,10 @@
   let ws = null;
   let retryMs = 1000;
   let view = { kind: 'public' }; // or { kind: 'dm', username: '...' }
+  // Bumped every time a conversation is opened. History is fetched after the
+  // switch, so a slow response for the previous conversation must be dropped
+  // rather than painted into the new one.
+  let viewSeq = 0;
   let conversations = [];
   let seen = {}; // message id -> {name, username, content} of the current view
   let pendingReply = null; // {id, name, username, content} or null
@@ -409,6 +413,7 @@
   }
 
   async function openPublic() {
+    const seq = ++viewSeq;
     view = { kind: 'public' };
     markRead('public');
     titleEl.textContent = 'Public Chat';
@@ -419,11 +424,17 @@
     cancelReply();
     renderConversations();
     try {
-      (await Api.messages(50)).forEach(addMessage);
+      const rows = await Api.messages(50);
+      // The reader may have opened another conversation while this was in
+      // flight; painting now would file these messages under the wrong
+      // heading and refill `seen` with another view's ids.
+      if (seq !== viewSeq) return;
+      rows.forEach(addMessage);
     } catch (e) { /* best-effort */ }
   }
 
   async function openDm(username) {
+    const seq = ++viewSeq;
     view = { kind: 'dm', username: username };
     markRead('dm', username);
     titleEl.textContent = 'Private chat with @' + username;
@@ -435,8 +446,13 @@
     ensureInList(username);
     renderConversations();
     try {
-      (await Api.dmHistory(username, 50)).forEach(addMessage);
+      const rows = await Api.dmHistory(username, 50);
+      // Same guard as openPublic: a response for a conversation the reader has
+      // already left must not be rendered into the one they are looking at.
+      if (seq !== viewSeq) return;
+      rows.forEach(addMessage);
     } catch (e) {
+      if (seq !== viewSeq) return;
       if (e && e.status === 404) {
         showDmError('User not found.');
         await openPublic();

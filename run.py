@@ -153,6 +153,15 @@ def preflight(workers: int, allow_split_rooms: bool) -> None:
     from app.db import DB_PATH
 
     fstype = check_local_filesystem(DB_PATH.parent, require_local=workers > 1)
+
+    # The admin panel posts its password outside the encrypted channel, so a
+    # plain-HTTP interface reachable from the network would put the one
+    # credential guarding the whole database on the wire in cleartext.
+    from app import admin
+    refusal = admin.plaintext_refusal()
+    if refusal:
+        raise SystemExit(refusal)
+
     if workers <= 1:
         return
 
@@ -212,6 +221,13 @@ def warn_insecure_startup(scheme: str) -> None:
             f"plain HTTP on {HOST}: this is reachable from the network with no "
             "encryption. Use TLS (SSL_CERTFILE/SSL_KEYFILE) before exposing it.")
     if admin.enabled():
+        if scheme == "http":
+            notes.append(
+                "the admin panel posts its password outside the encrypted "
+                "channel, so on plain HTTP anyone who can reach this port can "
+                "read it. It is confined to loopback here; put TLS in front "
+                "(or set ADMIN_ALLOW_PLAINTEXT=true to accept this knowingly) "
+                "before exposing it to a network.")
         weak = admin.password_strength()
         if weak:
             notes.append(

@@ -244,6 +244,48 @@ class AdminPanelTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("/my-control-panel/api", script)
 
+    def test_admin_mutations_reject_a_foreign_origin(self):
+        """The login endpoints had this check; the three mutating ones did not.
+
+        SameSite=Lax already keeps the cookie off a cross-site POST, so this is
+        defence in depth -- but the README promises same-origin enforcement on
+        browser POSTs, and a check that exists on half the routes is how that
+        promise rots.
+        """
+        self._boot(enc_enabled=False, admin_path="/admin")
+        api = self.admin_path + "/api"
+        jar = http.cookiejar.CookieJar()
+        status, body = self._post_jar(api + "/login",
+                                      {"password": "panel-test-password"}, jar)
+        self.assertEqual(status, 200, f"admin login failed: {body}")
+
+        opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(jar))
+
+        def call(path, method="POST", fields=None):
+            data = urllib.parse.urlencode(fields).encode() if fields else None
+            req = urllib.request.Request(
+                self.base + path, data=data, method=method,
+                headers={"Origin": "http://evil.example"})
+            try:
+                with opener.open(req, timeout=15) as r:
+                    return r.status
+            except urllib.error.HTTPError as e:
+                return e.code
+
+        self.assertEqual(
+            call(api + "/users",
+                 fields={"name": "X", "username": "eviluser",
+                         "password": "password1", "confirm": "password1"}),
+            403, "creating a user from a foreign origin was not refused")
+        self.assertEqual(
+            call(api + "/users/1", method="DELETE"), 403,
+            "deleting a user from a foreign origin was not refused")
+        self.assertEqual(
+            call(api + "/users/1/password",
+                 fields={"password": "password2", "confirm": "password2"}),
+            403, "resetting a password from a foreign origin was not refused")
+
     def test_the_panel_works_with_the_encrypted_transport_on(self):
         """The default configuration. This is the case that reported 403."""
         self._boot(enc_enabled=True, admin_path="/admin")

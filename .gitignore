@@ -25,6 +25,10 @@ dist/
 # Belt-and-braces: a staging tree must never be committed, wherever it lands.
 packaging/chat-app/
 chat-app/
+# Test cache (pytest artifacts; unittest leaves __pycache__ only)
+.pytest_cache/
+# Security-review working notes, not source
+MinimalChat-AUDIT/
 # Python
 __pycache__/
 *.pyc

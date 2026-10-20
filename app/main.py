@@ -18,6 +18,7 @@ import json
 import logging
 import re
 import sqlite3
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request, WebSocket
@@ -67,19 +68,9 @@ log = logging.getLogger("chat")
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title="Minimal Chat")
-# Middleware runs bottom-up, so add the channel gate first: it must run before
-# the cookie-auth endpoints are reached.
-app.add_middleware(SecurityHeadersMiddleware)
-if ENC_ENABLED:
-    app.add_middleware(ChannelOnlyMiddleware)
 
-SESSION_COOKIE = "session_id"
-UNDECRYPTABLE = "[message unavailable — decryption failed]"
-
-
-@app.on_event("startup")
-def startup() -> None:
+def _startup() -> None:
+    """Blocking startup work, run off the event loop by the lifespan."""
     db.init_db()
     configure_trusted_proxies(TRUSTED_PROXY_CIDRS)
     if TRUSTED_PROXY_CIDRS:
@@ -92,6 +83,28 @@ def startup() -> None:
     except Exception:
         # A diagnostic must not stop the server from serving.
         log.warning("could not purge expired sessions", exc_info=True)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # init_db() and the session purge do real I/O; on the loop they would stall
+    # the handshake of every client connecting during startup.
+    await asyncio.to_thread(_startup)
+    yield
+
+
+app = FastAPI(title="Minimal Chat", lifespan=lifespan)
+# Middleware runs bottom-up: the LAST one added is the outermost. So the header
+# middleware goes on second, outside the channel gate -- otherwise the gate's
+# 403 (the answer to every cookie-auth /api call while the channel is on) would
+# short-circuit before the security headers were attached, and exactly the
+# responses a probe reads first would arrive bare.
+if ENC_ENABLED:
+    app.add_middleware(ChannelOnlyMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+
+SESSION_COOKIE = "session_id"
+UNDECRYPTABLE = "[message unavailable — decryption failed]"
 
 
 # ---------- helpers ----------
@@ -200,8 +213,16 @@ def _asset_token(name: str) -> str | None:
 
 
 def valid_username(v: str) -> bool:
+    """ASCII letters, digits, '_' and '-' only.
+
+    `str.isalnum()` is Unicode-aware, so it accepted Cyrillic, Greek and other
+    scripts -- which lets U+0430 "аdmin" register next to "admin" and look
+    identical in the UI. In a chat where @username *is* the identity, that is
+    impersonation, so the ASCII check is part of the rule rather than a nicety.
+    """
     v = v.strip()
-    return 3 <= len(v) <= 32 and all(c.isalnum() or c in "_-" for c in v)
+    return (3 <= len(v) <= 32
+            and all(c.isascii() and (c.isalnum() or c in "_-") for c in v))
 
 
 def _client_ip(request: Request) -> str:
@@ -278,9 +299,13 @@ def _quotes_for(ids) -> dict:
     return {dict(r)["id"]: _quote_dict(r) for r in rows}
 
 
-def _reply_target(reply_to, scope: str, me_id: int, peer_id: int | None = None):
+async def _reply_target(reply_to, scope: str, me_id: int, peer_id: int | None = None):
     """Validate a reply reference. Replies stay inside their own scope:
     public->public only, DM->same pair only. Returns (quote|None, error|None).
+
+    The lookup runs in a worker thread: it is a SQLite read on the WebSocket
+    path, and a database momentarily waiting on a lock would otherwise stall
+    the event loop for every connected client, not just the sender.
     """
     if reply_to is None:
         return None, None
@@ -291,21 +316,22 @@ def _reply_target(reply_to, scope: str, me_id: int, peer_id: int | None = None):
     if rid <= 0:
         return None, "Invalid reply reference."
     if scope == "public":
-        row = db.query_one(
+        sql = (
             "SELECT m.id, m.content, u.name, u.username FROM messages m "
             "JOIN users u ON u.id = m.sender_id "
-            "WHERE m.id = ? AND m.recipient_id IS NULL",
-            (rid,),
+            "WHERE m.id = ? AND m.recipient_id IS NULL"
         )
+        params = (rid,)
     else:
-        row = db.query_one(
+        sql = (
             "SELECT m.id, m.content, u.name, u.username FROM messages m "
             "JOIN users u ON u.id = m.sender_id "
             "WHERE m.id = ? AND m.recipient_id IS NOT NULL AND ("
             "(m.sender_id = ? AND m.recipient_id = ?) OR "
-            "(m.sender_id = ? AND m.recipient_id = ?))",
-            (rid, me_id, peer_id, peer_id, me_id),
+            "(m.sender_id = ? AND m.recipient_id = ?))"
         )
+        params = (rid, me_id, peer_id, peer_id, me_id)
+    row = await asyncio.to_thread(db.query_one, sql, params)
     if not row:
         return None, "Replied message not found."
     return _quote_dict(row), None
@@ -562,6 +588,12 @@ def api_users(request: Request, q: str = "", limit: int = 20):
     user = current_user(request)
     if not user:
         return JSONResponse({"error": "Not logged in."}, status_code=401)
+    q = q.strip()
+    if not q:
+        # An empty query used to become "%%" and list the roster twenty names
+        # at a time; walking the alphabet enumerated every account. Search is
+        # the feature, an unfiltered dump is not, and no client asks for one.
+        return []
     limit = max(1, min(limit, 20))
     rows = db.query_all(
         "SELECT id, name, username FROM users "
@@ -735,6 +767,8 @@ if admin.enabled():
         password: str = Form(""),
         confirm: str = Form(""),
     ):
+        if (resp := _bad_origin(request)) is not None:
+            return resp
         if (resp := _require_admin(request)) is not None:
             return resp
         name, username = name.strip(), username.strip()
@@ -760,6 +794,8 @@ if admin.enabled():
 
     @app.delete(_AP + "/api/users/{user_id}")
     def admin_delete_user(request: Request, user_id: int):
+        if (resp := _bad_origin(request)) is not None:
+            return resp
         if (resp := _require_admin(request)) is not None:
             return resp
         if not db.query_one("SELECT id FROM users WHERE id = ?", (user_id,)):
@@ -780,6 +816,8 @@ if admin.enabled():
     def admin_set_password(
         request: Request, user_id: int, password: str = Form(""), confirm: str = Form("")
     ):
+        if (resp := _bad_origin(request)) is not None:
+            return resp
         if (resp := _require_admin(request)) is not None:
             return resp
         if not db.query_one("SELECT id FROM users WHERE id = ?", (user_id,)):
@@ -818,7 +856,7 @@ async def _tell(ws: WebSocket, message: dict) -> None:
 
 
 async def handle_public(ws: WebSocket, user: dict, content: str, data: dict) -> None:
-    quote, err = _reply_target(data.get("reply_to"), "public", user["id"])
+    quote, err = await _reply_target(data.get("reply_to"), "public", user["id"])
     if err:
         await _tell(ws, {"kind": "error", "error": err})
         return
@@ -869,8 +907,10 @@ async def handle_dm(ws: WebSocket, user: dict, data: dict, content: str) -> None
     if not to_username:
         await _tell(ws, {"kind": "error", "error": "No recipient given."})
         return
-    target = db.query_one(
-        "SELECT id, name, username FROM users WHERE username = ?", (to_username,)
+    target = await asyncio.to_thread(
+        db.query_one,
+        "SELECT id, name, username FROM users WHERE username = ?",
+        (to_username,),
     )
     if not target:
         await _tell(ws, {"kind": "error", "error": "User not found."})
@@ -879,7 +919,7 @@ async def handle_dm(ws: WebSocket, user: dict, data: dict, content: str) -> None
         await _tell(ws, {"kind": "error",
                          "error": "You cannot message yourself."})
         return
-    quote, err = _reply_target(
+    quote, err = await _reply_target(
         data.get("reply_to"), "dm", user["id"], target["id"]
     )
     if err:
@@ -945,7 +985,12 @@ async def _ws_loop(ws: WebSocket, user: dict, decode) -> None:
         if not content:
             continue
         if len(content) > 1000:
-            content = content[:1000]
+            # Refuse rather than truncate. A silently shortened message is one
+            # the sender believes arrived in full, and the cut is invisible in
+            # the echo because the echo carries the truncated text.
+            await _tell(ws, {"kind": "error",
+                             "error": "Message is too long (max 1000 characters)."})
+            continue
         allowed, _ = check_rate_limit(f"msg:{user['id']}", RATE_MSG_PER_MIN, 60)
         if not allowed:
             await _tell(ws, {"kind": "error",

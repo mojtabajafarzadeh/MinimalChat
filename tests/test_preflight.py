@@ -127,6 +127,61 @@ class PreflightTests(unittest.TestCase):
         self.assertIn("ENC_ENABLED=true", message)
 
 
+class AdminPlaintextGuardTests(unittest.TestCase):
+    """The admin panel posts its password outside the encrypted channel.
+
+    That is fine on loopback and behind TLS, and a cleartext credential on the
+    wire anywhere else. Startup has to refuse the difference rather than leave
+    it to whoever reads the README.
+    """
+
+    def _preflight(self, **env):
+        from testsupport import settings_env
+        with settings_env(**env):
+            with mock.patch("app.paths.filesystem_type", lambda *a, **k: "ext4"):
+                with redirect_stdout(io.StringIO()):
+                    try:
+                        runner.preflight(1, False)
+                        return "allowed"
+                    except SystemExit as exc:
+                        return str(exc)
+
+    def test_network_exposed_plain_http_is_refused(self):
+        message = self._preflight(ADMIN_PASSWORD="a-long-admin-passphrase",
+                                  HOST="0.0.0.0", ENC_ENABLED="true",
+                                  SSL_CERTFILE="", SSL_KEYFILE="",
+                                  ADMIN_ALLOW_PLAINTEXT="false")
+        self.assertNotEqual(message, "allowed")
+        self.assertIn("cleartext", message)
+        self.assertIn("ADMIN_ALLOW_PLAINTEXT", message)
+
+    def test_loopback_is_accepted(self):
+        self.assertEqual(
+            self._preflight(ADMIN_PASSWORD="a-long-admin-passphrase",
+                            HOST="127.0.0.1", SSL_CERTFILE="", SSL_KEYFILE=""),
+            "allowed")
+
+    def test_tls_is_accepted(self):
+        self.assertEqual(
+            self._preflight(ADMIN_PASSWORD="a-long-admin-passphrase",
+                            HOST="0.0.0.0",
+                            SSL_CERTFILE="cert.pem", SSL_KEYFILE="key.pem"),
+            "allowed")
+
+    def test_the_opt_in_is_accepted(self):
+        self.assertEqual(
+            self._preflight(ADMIN_PASSWORD="a-long-admin-passphrase",
+                            HOST="0.0.0.0", ADMIN_ALLOW_PLAINTEXT="true",
+                            SSL_CERTFILE="", SSL_KEYFILE=""),
+            "allowed")
+
+    def test_a_disabled_panel_is_not_affected(self):
+        self.assertEqual(
+            self._preflight(ADMIN_PASSWORD="", ADMIN_PASSWORD_HASH="",
+                            HOST="0.0.0.0", SSL_CERTFILE="", SSL_KEYFILE=""),
+            "allowed")
+
+
 class WarningTextTests(unittest.TestCase):
     def test_warning_text_mentions_the_operator_impact(self):
         text = runner.SPLIT_ROOMS_WARNING

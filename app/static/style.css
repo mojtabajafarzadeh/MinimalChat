@@ -248,6 +248,18 @@ body {
   padding: 1rem;
 }
 
+/* The auth pages stack the card and the identity panel in one column. The
+   panel is a sibling of the form, not a child: it is a <form> of its own, and
+   a form nested inside another is invalid HTML -- the parser drops the inner
+   one, so the "Verify and pin" button would submit the login form instead. */
+.auth-stack {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 22rem;
+}
+.auth-stack .card { max-width: none; }
+
 .switch { margin-top: 1rem; font-size: .8125rem; text-align: center; color: var(--muted-foreground); }
 .switch a { color: var(--foreground); text-decoration: underline; text-underline-offset: 3px; }
 

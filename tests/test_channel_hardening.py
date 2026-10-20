@@ -312,5 +312,50 @@ class CookieSecureFlagTests(unittest.TestCase):
                         "ride plaintext even on an HTTPS deployment")
 
 
+class FrontendFailClosedTests(unittest.TestCase):
+    """Two properties of api.js that no server-side test can see.
+
+    They are structural because the behaviour they guard is only reachable
+    after a handshake has already failed -- which needs a rotated key and a
+    real browser -- and because both are one-line regressions otherwise.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.src = (ROOT / "app" / "static" / "api.js").read_text(encoding="utf-8")
+
+    def _function(self, name):
+        start = self.src.index(f"function {name}(")
+        return self.src[start:self.src.index("\n  }", start)]
+
+    def test_a_changed_identity_blocks_instead_of_downgrading_to_plain(self):
+        body = self._function("reportIdentityChange")
+        self.assertIn(
+            "state.mode = 'blocked'", body,
+            "a failed identity check leaves the page on the plain transport, "
+            "so a login typed into it would be a cleartext password on the "
+            "wire -- the exact attack the check exists to stop")
+
+    def test_every_credential_entry_point_refuses_when_blocked(self):
+        for name in ("me", "login", "register"):
+            with self.subTest(function=name):
+                self.assertIn(
+                    "blocked()", self._function(name),
+                    f"{name}() does not refuse when the identity is unverified, "
+                    "so it can still fall through to the plain transport")
+
+    def test_logout_keeps_the_pinned_identity(self):
+        body = self._function("logout")
+        self.assertNotIn(
+            "Enc.clearPin()", body,
+            "logout drops the server-identity pin, which is a one-click "
+            "downgrade to trust-on-first-use")
+
+    def test_the_panel_still_offers_no_forget_pin_control(self):
+        body = (ROOT / "app" / "static" / "identity.js").read_text(encoding="utf-8")
+        self.assertNotIn("clearPin", body,
+                         "the identity panel grew a clearer for the pin")
+
+
 if __name__ == "__main__":
     unittest.main()
