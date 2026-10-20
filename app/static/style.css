@@ -100,13 +100,42 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* The root scroller is the page, so it has to be pinned to the viewport and
+   told not to scroll itself. Everything inside is a scroll container of its
+   own, and there is exactly one of them per view: the message list.
+
+   The height unit matters. `100vh` is the viewport with the browser's
+   toolbars HIDDEN, which on a phone is taller than what the user can see.
+   A body sized to 100vh is therefore taller than the visible area, the
+   document becomes scrollable by exactly that difference, and dragging the
+   page moves the header and the composer with it -- the whole frame slides
+   instead of only the messages.
+
+   `100dvh` tracks the viewport as the toolbars move, and `100svh` is the
+   stable one (the smallest the viewport ever gets). The chat frame uses dvh
+   so it grows into the space the toolbar vacates. The root uses `100%` --
+   the height of the html element, which is the viewport -- because a
+   percentage of the viewport never outgrows it.
+
+   The fallback order matters: an older browser that knows neither unit uses
+   `height: 100%`, which is the same intent without the unit. */
+html {
+  height: 100%;
+  overflow: hidden;
+  /* Stop a drag at the top of the message list from pulling the page down
+     (and with it, Safari's pull-to-refresh). */
+  overscroll-behavior: none;
+}
+
 body {
   font-family: var(--font-sans);
   font-size: 0.9375rem;
   line-height: 1.5;
   background: var(--background);
   color: var(--foreground);
-  min-height: 100vh;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -238,13 +267,18 @@ body {
 .muted { color: var(--muted-foreground); }
 
 .center {
-  min-height: 100vh;
-  /* iOS reports 100vh taller than what is on screen while its toolbar is
-     expanded, which would centre the card partly behind the browser UI. */
-  min-height: 100dvh;
+  /* The root is pinned to the viewport, so this fills what is left of it.
+     `align-items: center` centres the card, but a card taller than the
+     screen has to be reachable -- hence `safe center`, which falls back to
+     the start edge when it would overflow, and the overflow on this box
+     rather than on the page. */
+  height: 100%;
+  height: 100dvh;
   display: flex;
-  align-items: center;
+  align-items: safe center;
   justify-content: center;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 1rem;
 }
 
@@ -276,7 +310,11 @@ body {
 .chat-wrap {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  /* 100% of the pinned root, and dvh where the root is not yet 100% tall.
+     Both are the same height on a phone; the fallback is for a browser that
+     knows neither. */
+  height: 100%;
+  height: 100dvh;
   max-width: 60rem;
   margin: 0 auto;
   background: var(--background);
@@ -309,6 +347,10 @@ body {
   background: var(--header);
   color: var(--header-ink);
   border-bottom: 1px solid var(--border);
+  /* The header and the composer are fixed furniture: they must keep their
+     height and the message list takes what is left. Without this, a long
+     conversation squeezes them instead of the list growing. */
+  flex-shrink: 0;
 }
 .chat-header .me {
   font-weight: 500;
@@ -340,6 +382,8 @@ body {
   border-right: 1px solid var(--border);
   padding: 0.75rem;
   overflow-y: auto;
+  /* The drawer scrolls; it must not hand the gesture on to the page. */
+  overscroll-behavior: contain;
   background: var(--sidebar);
   display: flex;
   flex-direction: column;
@@ -435,6 +479,12 @@ body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* The only scroll container in the chat view. `contain` keeps the scroll
+     gesture here: reaching the end of the list does not hand the gesture to
+     the document, which is what produced the rubber-band that dragged the
+     whole page down. */
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 1rem;
   display: flex;
   flex-direction: column;
@@ -525,6 +575,8 @@ body {
   padding: 0.75rem;
   border-top: 1px solid var(--border);
   background: var(--background);
+  /* Fixed furniture, like the header. */
+  flex-shrink: 0;
 }
 .composer input { flex: 1; }
 
@@ -738,7 +790,10 @@ body {
 }
 
 @media (max-width: 600px) {
-  .chat-wrap, .chat-wrap.wide { height: 100dvh; }
+  /* The frame fills the pinned root. It used to be forced to 100dvh here,
+     which is what made it resize under the reader's thumb as Safari's toolbar
+     slid away. */
+  .chat-wrap, .chat-wrap.wide { height: 100%; }
   .card, .card.wide-card { padding: 1.25rem; }
   .layout { flex-direction: column; }
   .msg { max-width: 92%; }

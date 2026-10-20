@@ -489,6 +489,30 @@ and no build step, which keeps the offline Linux bundle self-contained. The
 trade-off is that Radix behaviour primitives (focus trapping, roving tabindex,
 portalled popovers) are hand-written where needed rather than imported.
 
+### Scrolling on a phone
+
+Only the message list scrolls. The header and the composer are fixed
+furniture: they keep their place, and the conversation scrolls between them.
+
+This needs the root to be pinned to the viewport (`html` and `body` are
+`height: 100%` with `overflow: hidden`) and the body **not** to be sized in
+`100vh`. On a phone `100vh` is the viewport with the browser's toolbars
+*hidden* — taller than what the reader can see — so a body sized that way
+leaves the document taller than the screen, the document becomes a scroll
+container of its own, and dragging it moves the header and the composer with
+it. The frame also no longer resizes under the reader's thumb as Safari's
+toolbar slides away, because it is sized to the root rather than to a
+viewport unit that changes underneath it.
+
+The list is the only scroll container, with `overscroll-behavior: contain`
+so a drag that reaches the end of the messages does not hand the gesture to
+the page — which is what produced the rubber-band that dragged the whole
+frame down.
+
+Verified in `tests/test_mobile_scroll.py`, which checks the stylesheet's
+contract as source and the behaviour in a real browser at a phone's
+viewport.
+
 ### Responsive behaviour
 
 The layout is verified by measuring the rendered page in a real browser at
