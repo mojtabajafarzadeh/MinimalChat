@@ -182,6 +182,23 @@ class EnumerationTests(unittest.TestCase):
 
     # ------------------------------------------------------- roster oracle
 
+    def test_an_empty_query_does_not_list_everyone(self):
+        """?q= (or q with only spaces) must return [], not the roster.
+
+        An empty query used to become "%%" and list the roster twenty names at
+        a time; walking the alphabet enumerated every account. This is the
+        boundary the LLLike escaping tests next door do not cover, because
+        they start from a real wildcard rather than from nothing at all.
+        """
+        jar = self._login("carol")
+        for q in ("", "%20", "%20%20"):
+            with self.subTest(q=q):
+                status, body = self._get("/api/users?q=" + q, jar)
+                self.assertEqual(status, 200)
+                self.assertEqual(body.strip(), "[]",
+                                 f"?q={q!r} returned {body[:80]!r}, not an "
+                                 "empty list; the roster is being dumped")
+
     def test_a_wildcard_query_does_not_return_the_whole_roster(self):
         """?q=% must match only usernames that literally contain '%'.
 
