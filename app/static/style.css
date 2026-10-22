@@ -190,7 +190,11 @@ body {
   border: 1px solid var(--input);
   background: transparent;
   padding: 0.5rem 0.75rem;
-  font-size: 0.875rem;
+  /* 16px, not 14. iOS zooms into any text input whose computed font-size is
+     under 16px when it gains focus -- every field in this app used to do
+     that, which made the whole PWA zoom on tap. The extra 2px costs a
+     slightly larger glyph, not a taller box: line-height stays fixed. */
+  font-size: 1rem;
   /* Match .btn's line-height, otherwise inputs come out 34px tall next to
      38px buttons in the same form. */
   line-height: 1.25rem;
@@ -727,7 +731,7 @@ body {
   margin-top: 0.5rem;
 }
 .identity-form .label { flex: 1 0 100%; margin-top: 0.5rem; }
-.identity-input { flex: 1 1 12rem; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.75rem; }
+.identity-input { flex: 1 1 12rem; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 1rem; }
 .identity-form .btn { flex-shrink: 0; }
 
 .identity-result { margin-top: 0.5rem; }

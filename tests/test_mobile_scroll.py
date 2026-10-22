@@ -133,6 +133,33 @@ class ScrollContractTests(unittest.TestCase):
                       "a tall login form is now unreachable, because the "
                       "root no longer scrolls")
 
+    def test_ios_does_not_zoom_into_the_inputs(self):
+        """iOS zooms into any text input whose computed font-size is under
+        16px when it gains focus. A PWA that zooms on every tap is broken in
+        the truest sense: the whole app magnifies because of one field.
+
+        The threshold is a hard Apple rule, so the guard checks the actual
+        declared size. The inputs were 0.875rem (14px) and the fingerprint
+        field 0.75rem (12px) -- both under it."""
+        problems = []
+        for m in re.finditer(
+                r"([^{}]*input[^{}]*|[^{}]*textarea[^{}]*)\{([^{}]*)\}", self.css):
+            selector = " ".join(m.group(1).split())
+            font = re.search(r"font-size:\s*([^;]+)", m.group(2))
+            if not font:
+                continue
+            size = font.group(1).strip()
+            px = None
+            if size.endswith("px"):
+                px = float(size[:-2])
+            elif size.endswith("rem"):
+                px = float(size[:-3]) * 16
+            if px is not None and px < 16:
+                problems.append(f"{selector}: {size} ({px:.0f}px)")
+        self.assertEqual([], problems,
+                         "inputs under 16px make iOS zoom on tap: "
+                         + "; ".join(problems))
+
 
 @unittest.skipUnless(HAVE_WEBSOCKET, "needs the websocket-client module")
 @unittest.skipIf(_find_chrome() is None, "needs a Chrome/Chromium binary")
